@@ -1,0 +1,11 @@
+{
+  "id": "tide-pool",
+  "name": "Tide Pool",
+  "version": "1.6.0",
+  "description": "Direct /tide_pool (plus aliases) and /quota_all commands for provider quota windows without LLM inference.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

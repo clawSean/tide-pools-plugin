@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw-ext/tide-pool",
+  "version": "1.6.0",
+  "private": true,
+  "type": "module",
+  "description": "OpenClaw quota usage plugin and CLI with optional Venice augmentation",
+  "main": "index.ts",
+  "bin": {
+    "tide-pool": "cli.mjs",
+    "lobster-usage": "cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "usage-core.mjs",
+    "index.ts",
+    "openclaw.plugin.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test:cli": "node ./cli.mjs --format text --no-cache",
+    "test:json": "node ./cli.mjs --format json --no-cache",
+    "pack:local": "npm pack"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
