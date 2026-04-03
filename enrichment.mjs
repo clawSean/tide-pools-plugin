@@ -309,14 +309,17 @@ function scanSession(file, sessionIndex) {
 /**
  * Format enrichment data into a text block for appending to the report.
  * Returns null if enrichment is unavailable or empty.
+ *
+ * Default view: By Category + By Model (generic, works for anyone).
+ * Detail view (opts.detail=true): adds individual session list.
  */
 export function formatEnrichment(enrichment, opts = {}) {
   try {
     if (!enrichment?.available || !enrichment?.sessions?.length) return null;
 
+    const detail = opts.detail === true;
     const maxSessions = opts.maxSessions || 8;
     const totals = enrichment.totals;
-    const sessions = enrichment.sessions.slice(0, maxSessions);
     const byModel = enrichment.byModel || {};
 
     const lines = [];
@@ -324,36 +327,63 @@ export function formatEnrichment(enrichment, opts = {}) {
       ? `last ${enrichment.lookbackHours}h`
       : "recent";
 
-    lines.push(`\nSession Breakdown (${period}):`);
-
-    for (const s of sessions) {
-      const tokens = Number(s.totalTokens).toLocaleString();
-      const cost = s.costTotal > 0 ? ` · $${s.costTotal.toFixed(2)}` : "";
-      const modelTag = s.model ? ` [${shortModel(s.model)}]` : "";
-      const label = s.label || s.sessionId.slice(0, 12);
-      lines.push(`  ${label}${modelTag} — ${tokens} tok${cost}`);
+    // ── By Category ──
+    const byCategory = {};
+    for (const s of enrichment.sessions) {
+      const cat = categorizeSession(s);
+      if (!byCategory[cat]) {
+        byCategory[cat] = { tokens: 0, cost: 0, sessions: 0 };
+      }
+      byCategory[cat].tokens += s.totalTokens;
+      byCategory[cat].cost += s.costTotal;
+      byCategory[cat].sessions += 1;
     }
 
-    if (enrichment.sessions.length > maxSessions) {
-      const remaining = enrichment.sessions.length - maxSessions;
-      lines.push(`  ... +${remaining} more`);
+    const catEntries = Object.entries(byCategory).sort(
+      (a, b) => b[1].tokens - a[1].tokens
+    );
+
+    lines.push(`\nUsage Breakdown (${period}):`);
+    const catColWidth = Math.max(...catEntries.map(([c]) => c.length), 6);
+    for (const [cat, data] of catEntries) {
+      const tokens = fmtTokens(data.tokens);
+      const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
+      const count = `(${data.sessions})`;
+      lines.push(`  ${cat.padEnd(catColWidth)}  ${tokens} tok${cost}  ${count}`);
     }
 
-    // Model breakdown
-    const modelEntries = Object.entries(byModel)
-      .sort((a, b) => b[1].tokens - a[1].tokens);
+    // ── By Model ──
+    const modelEntries = Object.entries(byModel).sort(
+      (a, b) => b[1].tokens - a[1].tokens
+    );
 
-    if (modelEntries.length > 1) {
+    if (modelEntries.length > 0) {
       lines.push(`\nBy Model:`);
       for (const [m, data] of modelEntries) {
-        const tokens = Number(data.tokens).toLocaleString();
+        const tokens = fmtTokens(data.tokens);
         const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
-        lines.push(`  ${shortModel(m)}: ${tokens} tok (${data.sessions} session${data.sessions > 1 ? "s" : ""})${cost}`);
+        lines.push(`  ${shortModel(m)}: ${tokens} tok${cost}`);
       }
     }
 
-    // Totals
-    const totalTok = Number(totals.totalTokens).toLocaleString();
+    // ── Detail: individual sessions (opt-in) ──
+    if (detail) {
+      const sessions = enrichment.sessions.slice(0, maxSessions);
+      lines.push(`\nSessions:`);
+      for (const s of sessions) {
+        const tokens = fmtTokens(s.totalTokens);
+        const cost = s.costTotal > 0 ? ` · $${s.costTotal.toFixed(2)}` : "";
+        const modelTag = s.model ? ` [${shortModel(s.model)}]` : "";
+        const label = s.label || s.sessionId.slice(0, 12);
+        lines.push(`  ${label}${modelTag} — ${tokens} tok${cost}`);
+      }
+      if (enrichment.sessions.length > maxSessions) {
+        lines.push(`  ... +${enrichment.sessions.length - maxSessions} more`);
+      }
+    }
+
+    // ── Totals ──
+    const totalTok = fmtTokens(totals.totalTokens);
     const totalCost =
       totals.costTotal > 0 ? ` · $${totals.costTotal.toFixed(2)}` : "";
     lines.push(`\nTotal: ${totalTok} tokens${totalCost}`);
@@ -362,6 +392,53 @@ export function formatEnrichment(enrichment, opts = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Categorize a session into a generic bucket.
+ */
+function categorizeSession(session) {
+  const key = session.label || "";
+  const chatType = session.chatType || "";
+
+  // Cron jobs
+  if (
+    key.toLowerCase().startsWith("cron") ||
+    (session.sessionId && session.label && session.label.includes("cron"))
+  ) {
+    return "Cron";
+  }
+
+  // Check the raw session key pattern stored in label
+  const rawKey = session._rawKey || key;
+  if (rawKey.includes(":cron:")) return "Cron";
+
+  // Groups
+  if (chatType === "group" || key.includes(":g-") || key.includes("Group")) {
+    return "Groups";
+  }
+
+  // DMs
+  if (chatType === "direct" || key.includes("DM") || key.includes(":direct:")) {
+    return "DMs";
+  }
+
+  // Main session
+  if (key === "Main session" || key.endsWith(":main")) {
+    return "Main";
+  }
+
+  return "Other";
+}
+
+/**
+ * Format token count with K/M suffixes for readability.
+ */
+function fmtTokens(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 10_000) return `${(n / 1_000).toFixed(0)}K`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
 }
 
 /**
