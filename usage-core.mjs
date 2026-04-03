@@ -1,173 +1,21 @@
-import { execSync } from "node:child_process";
+/**
+ * Tide Pool v2 — Usage Core
+ *
+ * Architecture:
+ *   Layer 1 (Accuracy): Adapter registry fetches dashboard-accurate numbers
+ *                        from provider APIs with priority + fallback.
+ *   Layer 2 (Enrichment): JSONL session mining shows where usage went.
+ *                          100% optional — never blocks Layer 1.
+ */
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveAll } from "./adapters/index.mjs";
 
 const DEFAULT_CACHE_TTL_MS = 45_000;
 
-function safeJsonParse(str) {
-  try {
-    return JSON.parse(str);
-  } catch {
-    return null;
-  }
-}
-
-function firstJsonObject(raw) {
-  const i = raw.indexOf("{");
-  if (i < 0) return null;
-  return safeJsonParse(raw.slice(i));
-}
-
-function run(cmd, timeoutMs = 20000) {
-  try {
-    const stdout = execSync(cmd, {
-      encoding: "utf8",
-      timeout: timeoutMs,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: "/bin/bash",
-    });
-    return { ok: true, stdout };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err?.message || String(err),
-      stdout: err?.stdout ? String(err.stdout) : "",
-      stderr: err?.stderr ? String(err.stderr) : "",
-    };
-  }
-}
-
-function countdown(resetAtMs) {
-  if (!resetAtMs) return "reset unknown";
-  const delta = Math.max(0, resetAtMs - Date.now());
-  const totalMins = Math.floor(delta / 60000);
-  const d = Math.floor(totalMins / 1440);
-  const h = Math.floor((totalMins % 1440) / 60);
-  const m = totalMins % 60;
-  const parts = [];
-  if (d) parts.push(`${d}d`);
-  if (h) parts.push(`${h}h`);
-  if (m || parts.length === 0) parts.push(`${m}m`);
-  return `in ${parts.join(" ")}`;
-}
-
-function leftPercent(usedPercent) {
-  if (typeof usedPercent !== "number" || Number.isNaN(usedPercent)) return null;
-  return Math.max(0, 100 - Math.round(usedPercent));
-}
-
-function pctLeft(remaining, limit) {
-  if (typeof remaining !== "number" || typeof limit !== "number" || limit <= 0) return null;
-  return Math.max(0, Math.min(100, Math.round((remaining / limit) * 100)));
-}
-
-function parseUsageStatus() {
-  const probe = run("openclaw status --usage --json 2>/dev/null");
-  if (!probe.ok) return { providers: [], error: `status call failed: ${probe.error}` };
-
-  const parsed = firstJsonObject(probe.stdout || "");
-  if (!parsed) return { providers: [], error: "status JSON parse failed" };
-
-  return {
-    providers: parsed?.usage?.providers || [],
-    raw: parsed,
-    error: null,
-  };
-}
-
-function parseVeniceFromDiemOutput(raw) {
-  const lines = String(raw || "").split(/\r?\n/);
-
-  let status;
-  let diem;
-  let remReq;
-  let limReq;
-  let remTok;
-  let limTok;
-
-  for (const line of lines) {
-    const l = line.toLowerCase();
-    if (l.includes("http status:")) status = line.split(":").slice(1).join(":").trim();
-
-    if (l.includes("x-venice-balance-diem:")) {
-      const v = parseFloat(line.split(":").slice(1).join(":").trim());
-      if (!Number.isNaN(v)) diem = Number(v.toFixed(6));
-    }
-
-    if (l.includes("x-ratelimit-remaining-requests:")) {
-      const v = parseInt(line.split(":").slice(1).join(":").trim(), 10);
-      if (!Number.isNaN(v)) remReq = v;
-    }
-    if (l.includes("x-ratelimit-limit-requests:")) {
-      const v = parseInt(line.split(":").slice(1).join(":").trim(), 10);
-      if (!Number.isNaN(v)) limReq = v;
-    }
-    if (l.includes("x-ratelimit-remaining-tokens:")) {
-      const v = parseInt(line.split(":").slice(1).join(":").trim(), 10);
-      if (!Number.isNaN(v)) remTok = v;
-    }
-    if (l.includes("x-ratelimit-limit-tokens:")) {
-      const v = parseInt(line.split(":").slice(1).join(":").trim(), 10);
-      if (!Number.isNaN(v)) limTok = v;
-    }
-  }
-
-  if (status === "402" && diem == null) diem = 0;
-
-  return {
-    available: diem != null || remReq != null || remTok != null,
-    status: status || null,
-    diem,
-    requests:
-      remReq != null && limReq != null
-        ? {
-            remaining: remReq,
-            limit: limReq,
-            leftPercent: pctLeft(remReq, limReq),
-          }
-        : null,
-    tokens:
-      remTok != null && limTok != null
-        ? {
-            remaining: remTok,
-            limit: limTok,
-            leftPercent: pctLeft(remTok, limTok),
-          }
-        : null,
-  };
-}
-
-function getVeniceUsage() {
-  const probe = run("python3 ~/.openclaw/extensions/diem/diem.py", 15000);
-  if (!probe.ok) {
-    const reason = (probe.stderr || probe.error || "venice check failed").trim();
-    return {
-      source: "diem-plugin",
-      available: false,
-      optional: true,
-      error: reason,
-      raw: probe,
-      data: null,
-    };
-  }
-
-  const data = parseVeniceFromDiemOutput(probe.stdout);
-  return {
-    source: "diem-plugin",
-    available: data.available,
-    optional: true,
-    error: null,
-    data,
-    raw: probe.stdout,
-  };
-}
-
-function providerLooksLikeVenice(p) {
-  const id = String(p?.provider || "").toLowerCase();
-  const dn = String(p?.displayName || "").toLowerCase();
-  return id.includes("venice") || dn.includes("venice");
-}
+// ─── Cache ──────────────────────────────────��────────────────────────────────
 
 function resolveCachePath(customPath) {
   if (customPath) return customPath;
@@ -180,7 +28,7 @@ function readCache(cachePath, ttlMs) {
   if (!ttlMs || ttlMs <= 0) return null;
   try {
     const raw = fs.readFileSync(cachePath, "utf8");
-    const parsed = safeJsonParse(raw);
+    const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.cachedAtMs !== "number" || !parsed.snapshot) return null;
     if (Date.now() - parsed.cachedAtMs > ttlMs) return null;
     return parsed.snapshot;
@@ -192,22 +40,95 @@ function readCache(cachePath, ttlMs) {
 function writeCache(cachePath, snapshot) {
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    const payload = {
-      cachedAtMs: Date.now(),
-      snapshot,
-    };
-    fs.writeFileSync(cachePath, JSON.stringify(payload));
+    fs.writeFileSync(cachePath, JSON.stringify({ cachedAtMs: Date.now(), snapshot }));
   } catch {
-    // best effort cache only
+    // best-effort cache
   }
 }
 
-export function collectUsageSnapshot(opts = {}) {
+// ─── Enrichment (fault-isolated import) ──────────────────────────────────────
+
+let _enrichmentModule = null;
+
+async function loadEnrichment() {
+  if (_enrichmentModule !== null) return _enrichmentModule;
+  try {
+    _enrichmentModule = await import("./enrichment.mjs");
+  } catch {
+    _enrichmentModule = false; // mark as failed so we don't retry
+  }
+  return _enrichmentModule;
+}
+
+async function safeCollectEnrichment(opts) {
+  try {
+    const mod = await loadEnrichment();
+    if (!mod) return { available: false };
+    return mod.collectEnrichment(opts);
+  } catch {
+    return { available: false };
+  }
+}
+
+async function safeFormatEnrichment(enrichment, opts) {
+  try {
+    const mod = await loadEnrichment();
+    if (!mod) return null;
+    return mod.formatEnrichment(enrichment, opts);
+  } catch {
+    return null;
+  }
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function countdown(resetAt) {
+  let resetAtMs;
+  if (typeof resetAt === "number") {
+    resetAtMs = resetAt;
+  } else if (typeof resetAt === "string") {
+    resetAtMs = new Date(resetAt).getTime();
+  } else {
+    return "reset unknown";
+  }
+
+  if (Number.isNaN(resetAtMs)) return "reset unknown";
+
+  const delta = Math.max(0, resetAtMs - Date.now());
+  const totalMins = Math.floor(delta / 60000);
+  const d = Math.floor(totalMins / 1440);
+  const h = Math.floor((totalMins % 1440) / 60);
+  const m = totalMins % 60;
+  const parts = [];
+  if (d) parts.push(`${d}d`);
+  if (h) parts.push(`${h}h`);
+  if (m || parts.length === 0) parts.push(`${m}m`);
+  return `in ${parts.join(" ")}`;
+}
+
+// ─── Snapshot Collection ─────────────────────────────────────────────────────
+
+/**
+ * Collect a full usage snapshot: adapters + optional enrichment.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.includeVenice
+ * @param {boolean} opts.includeEnrichment
+ * @param {number}  opts.cacheTtlMs
+ * @param {string}  opts.cachePath
+ * @param {boolean} opts.bypassCache
+ * @param {number}  opts.enrichmentLookbackHours
+ */
+export async function collectUsageSnapshot(opts = {}) {
   const includeVenice = opts.includeVenice !== false;
-  const cacheTtlMs = Number.isFinite(opts.cacheTtlMs) ? Number(opts.cacheTtlMs) : DEFAULT_CACHE_TTL_MS;
+  const includeEnrichment = opts.includeEnrichment !== false;
+  const cacheTtlMs = Number.isFinite(opts.cacheTtlMs)
+    ? Number(opts.cacheTtlMs)
+    : DEFAULT_CACHE_TTL_MS;
   const cachePath = resolveCachePath(opts.cachePath);
   const bypassCache = opts.bypassCache === true;
 
+  // Check cache
   if (!bypassCache) {
     const cached = readCache(cachePath, cacheTtlMs);
     if (cached) {
@@ -218,19 +139,26 @@ export function collectUsageSnapshot(opts = {}) {
     }
   }
 
-  const status = parseUsageStatus();
-  const providers = Array.isArray(status.providers) ? status.providers : [];
-  const hasVeniceInStatus = providers.some(providerLooksLikeVenice);
-  const venice = includeVenice && !hasVeniceInStatus ? getVeniceUsage() : null;
+  // Layer 1: Adapter resolution
+  const resolved = await resolveAll({ includeVenice });
+
+  // Layer 2: Enrichment (fault-isolated)
+  let enrichment = null;
+  if (includeEnrichment) {
+    enrichment = await safeCollectEnrichment({
+      lookbackHours: opts.enrichmentLookbackHours,
+    });
+  }
 
   const snapshot = {
     generatedAt: new Date().toISOString(),
-    statusError: status.error || null,
-    providers,
-    hasVeniceInStatus,
-    venice,
+    version: "2.0.0",
+    providers: resolved.providers,
+    adapterResults: resolved.adapterResults,
+    enrichment,
   };
 
+  // Write cache
   if (!bypassCache && cacheTtlMs > 0) writeCache(cachePath, snapshot);
 
   return {
@@ -239,64 +167,109 @@ export function collectUsageSnapshot(opts = {}) {
   };
 }
 
+// ─── Formatting ──────────────────────────────────────────────────────────────
+
 function formatProviderLine(p) {
   const name = p.displayName || p.provider || "Unknown provider";
   const plan = p.plan ? ` [${p.plan}]` : "";
+  const sourceTag = p.source ? ` — via ${formatSourceName(p.source)}` : "";
 
-  if (p.error) return `• ${name}${plan}: unavailable — ${p.error}`;
+  // Venice is special: uses Diem balance + rate limits
+  if (p.provider === "venice") {
+    return formatVeniceLine(p, sourceTag);
+  }
+
+  if (p.error) return `• ${name}${plan}: unavailable — ${p.error}${sourceTag}`;
 
   const windows = Array.isArray(p.windows) ? p.windows : [];
-  if (!windows.length) return `• ${name}${plan}: no quota windows returned`;
+  if (!windows.length) return `• ${name}${plan}: no quota windows${sourceTag}`;
 
   const chunks = windows.map((w) => {
     const label = w.label || "window";
-    const left = leftPercent(w.usedPercent);
-    const leftTxt = left == null ? "left unknown" : `${left}% left`;
+    const leftTxt =
+      w.leftPercent != null ? `${w.leftPercent}% left` : "left unknown";
     return `${label}: ${leftTxt} (${countdown(w.resetAt)})`;
   });
 
-  return `• ${name}${plan}: ${chunks.join(" | ")}`;
+  return `• ${name}${plan}: ${chunks.join(" | ")}${sourceTag}`;
 }
 
-function formatVeniceLine(venice) {
-  if (!venice) return null;
-  if (!venice.available) return `• Venice [Diem]: unavailable — ${venice.error || "unknown error"}`;
-
-  const chunks = [];
-  if (venice?.data?.diem != null) chunks.push(`Diem: ${Number(venice.data.diem).toFixed(4)}`);
-
-  const req = venice?.data?.requests;
-  if (req) chunks.push(`Requests: ${req.remaining}/${req.limit} (${req.leftPercent ?? "?"}% left)`);
-
-  const tok = venice?.data?.tokens;
-  if (tok)
-    chunks.push(
-      `Tokens: ${Number(tok.remaining).toLocaleString()}/${Number(tok.limit).toLocaleString()} (${tok.leftPercent ?? "?"}% left)`,
-    );
-
-  if (!chunks.length) {
-    const st = venice?.data?.status ? ` (HTTP ${venice.data.status})` : "";
-    return `• Venice [Diem]: no balance headers returned${st}`;
+function formatVeniceLine(p, sourceTag) {
+  if (p.error && !p.diem && !p.requests && !p.tokens) {
+    return `• Venice [Diem]: unavailable — ${p.error}${sourceTag}`;
   }
 
-  return `• Venice [Diem]: ${chunks.join(" | ")}`;
+  const chunks = [];
+  if (p.diem != null) chunks.push(`Diem: ${Number(p.diem).toFixed(4)}`);
+
+  if (p.requests) {
+    chunks.push(
+      `Requests: ${p.requests.remaining}/${p.requests.limit} (${p.requests.leftPercent ?? "?"}% left)`
+    );
+  }
+
+  if (p.tokens) {
+    chunks.push(
+      `Tokens: ${Number(p.tokens.remaining).toLocaleString()}/${Number(p.tokens.limit).toLocaleString()} (${p.tokens.leftPercent ?? "?"}% left)`
+    );
+  }
+
+  if (!chunks.length) {
+    return `• Venice [Diem]: no balance data${sourceTag}`;
+  }
+
+  return `• Venice [Diem]: ${chunks.join(" | ")}${sourceTag}`;
 }
 
-export function formatUsageReport(snapshot, opts = {}) {
+function formatSourceName(source) {
+  const map = {
+    "openai-codex-oauth": "OAuth API",
+    "openclaw-status": "OpenClaw status",
+    "venice-diem": "Diem API",
+  };
+  return map[source] || source;
+}
+
+/**
+ * Format a full usage report from a snapshot.
+ *
+ * @param {object} snapshot - from collectUsageSnapshot()
+ * @param {object} opts
+ * @param {string} opts.theme - "plain" | "tide"
+ * @param {boolean} opts.includeEnrichment
+ */
+export async function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
   const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pool";
+  const includeEnrichment = opts.includeEnrichment !== false;
 
-  const lines = [heading];
+  const lines = [heading, ""];
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
 
   if (!providers.length) {
-    lines.push("• No provider usage windows found. (Credentials/scope may be missing.)");
+    lines.push(
+      "• No provider usage data found. (Credentials/scope may be missing.)"
+    );
   } else {
-    for (const p of providers) lines.push(formatProviderLine(p));
+    for (const p of providers) {
+      lines.push(formatProviderLine(p));
+    }
   }
 
-  const veniceLine = formatVeniceLine(snapshot?.venice || null);
-  if (veniceLine) lines.push(veniceLine);
+  // Enrichment section (fault-isolated)
+  if (includeEnrichment && snapshot?.enrichment) {
+    const enrichText = await safeFormatEnrichment(snapshot.enrichment);
+    if (enrichText) {
+      lines.push(enrichText);
+    }
+  }
 
   return lines.join("\n");
 }
+
+// ─── Backward Compatibility ──────────────────────────────────────────────────
+// These re-exports keep the CLI and plugin working during the transition.
+// They can be removed in a future version once cli.mjs and index.ts are updated.
+
+export { collectUsageSnapshot as collectUsageSnapshotV2 };
+export { formatUsageReport as formatUsageReportV2 };

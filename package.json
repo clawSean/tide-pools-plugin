@@ -1,6 +1,6 @@
 {
   "name": "@openclaw-ext/tide-pool",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "description": "OpenClaw quota usage plugin and CLI with optional Venice augmentation",
@@ -12,6 +12,11 @@
   "files": [
     "cli.mjs",
     "usage-core.mjs",
+    "enrichment.mjs",
+    "adapters/index.mjs",
+    "adapters/openclaw-status.mjs",
+    "adapters/openai-codex-oauth.mjs",
+    "adapters/venice-diem.mjs",
     "index.ts",
     "openclaw.plugin.json",
     "README.md"
