@@ -10,14 +10,9 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
-const DEFAULT_SESSIONS_DIR = path.join(
-  process.env.HOME || "/root",
-  ".openclaw",
-  "agents",
-  "mainelobster",
-  "sessions"
-);
+const AGENTS_DIR = path.join(os.homedir(), ".openclaw", "agents");
 
 // Only look at files modified in the last N hours for performance
 const DEFAULT_LOOKBACK_HOURS = 24;
@@ -26,58 +21,148 @@ const DEFAULT_LOOKBACK_HOURS = 24;
 // but we get most value from recent messages. 256KB per file keeps things fast.
 const MAX_BYTES_PER_FILE = 256 * 1024;
 
+// ─── Session Index ───────────────────────────────────────────────────────────
+
+/**
+ * Build a reverse lookup: sessionId UUID → { label, model, agent, kind }
+ * by reading sessions.json from all agent directories.
+ */
+function buildSessionIndex() {
+  const index = new Map(); // sessionId → metadata
+
+  try {
+    if (!fs.existsSync(AGENTS_DIR)) return index;
+
+    const agents = fs.readdirSync(AGENTS_DIR);
+    for (const agent of agents) {
+      try {
+        const sjPath = path.join(AGENTS_DIR, agent, "sessions", "sessions.json");
+        if (!fs.existsSync(sjPath)) continue;
+
+        const raw = fs.readFileSync(sjPath, "utf8");
+        const data = JSON.parse(raw);
+
+        for (const [key, meta] of Object.entries(data)) {
+          if (!meta || typeof meta !== "object") continue;
+          const sid = meta.sessionId;
+          if (!sid) continue;
+
+          index.set(sid, {
+            key,
+            agent,
+            label:
+              meta.label ||
+              meta.displayName ||
+              meta.subject ||
+              humanizeSessionKey(key),
+            model: meta.model || null,
+            chatType: meta.chatType || null,
+            channel: meta.channel || null,
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // Return whatever we got
+  }
+
+  return index;
+}
+
+/**
+ * Turn a raw session key into something readable.
+ * "agent:mainelobster:telegram:direct:6566057320" → "DM (telegram)"
+ * "agent:main:cron:abc123" → "Cron job"
+ */
+function humanizeSessionKey(key) {
+  if (!key) return "unknown";
+
+  if (key.includes(":cron:")) return "Cron job";
+  if (key.includes(":direct:")) {
+    const channel = key.match(/:(\w+):direct:/)?.[1] || "dm";
+    return `DM (${channel})`;
+  }
+  if (key.includes(":group:")) {
+    const channel = key.match(/:(\w+):group:/)?.[1] || "group";
+    return `Group (${channel})`;
+  }
+  if (key.endsWith(":main")) return "Main session";
+
+  return key.split(":").slice(-2).join(":");
+}
+
+// ─── Session Scanning ────────────────────────────────────────────────────────
+
 /**
  * Attempt to collect enrichment data from session JSONLs.
- *
- * @param {object} opts
- * @param {string} opts.sessionsDir - path to sessions directory
- * @param {number} opts.lookbackHours - how far back to scan
- * @returns {{ available: boolean, sessions?: object[], totals?: object, error?: string }}
  */
 export function collectEnrichment(opts = {}) {
   try {
-    const sessionsDir = opts.sessionsDir || DEFAULT_SESSIONS_DIR;
     const lookbackHours = opts.lookbackHours || DEFAULT_LOOKBACK_HOURS;
 
-    if (!fs.existsSync(sessionsDir)) {
-      return { available: false, error: "Sessions directory not found" };
+    // Build session index for label/model resolution
+    const sessionIndex = buildSessionIndex();
+
+    // Find all agent session directories
+    const sessionDirs = [];
+    try {
+      const agents = fs.readdirSync(AGENTS_DIR);
+      for (const agent of agents) {
+        const dir = path.join(AGENTS_DIR, agent, "sessions");
+        if (fs.existsSync(dir)) {
+          sessionDirs.push({ agent, dir });
+        }
+      }
+    } catch {
+      return { available: false, error: "Could not list agent directories" };
+    }
+
+    if (!sessionDirs.length) {
+      return { available: false, error: "No session directories found" };
     }
 
     const cutoff = Date.now() - lookbackHours * 60 * 60 * 1000;
-    let files;
-    try {
-      files = fs
-        .readdirSync(sessionsDir)
-        .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."))
-        .map((f) => {
-          const fp = path.join(sessionsDir, f);
-          try {
-            const stat = fs.statSync(fp);
-            return { name: f, path: fp, mtimeMs: stat.mtimeMs };
-          } catch {
-            return null;
-          }
-        })
-        .filter((f) => f && f.mtimeMs >= cutoff)
-        .sort((a, b) => b.mtimeMs - a.mtimeMs);
-    } catch {
-      return { available: false, error: "Could not list session files" };
+    const allFiles = [];
+
+    for (const { agent, dir } of sessionDirs) {
+      try {
+        const files = fs
+          .readdirSync(dir)
+          .filter((f) => f.endsWith(".jsonl") && !f.includes(".reset."))
+          .map((f) => {
+            const fp = path.join(dir, f);
+            try {
+              const stat = fs.statSync(fp);
+              return { name: f, path: fp, mtimeMs: stat.mtimeMs, agent };
+            } catch {
+              return null;
+            }
+          })
+          .filter((f) => f && f.mtimeMs >= cutoff);
+
+        allFiles.push(...files);
+      } catch {
+        continue;
+      }
     }
 
-    if (!files.length) {
-      return { available: true, sessions: [], totals: emptyTotals() };
+    if (!allFiles.length) {
+      return { available: true, sessions: [], totals: emptyTotals(), byModel: {} };
     }
 
-    // Cap file count to keep scan time under a few seconds
-    const MAX_FILES = 20;
-    const scanned = files.slice(0, MAX_FILES);
+    // Sort by most recently modified, cap at 20
+    allFiles.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const scanned = allFiles.slice(0, 20);
 
     const sessions = [];
     const totals = emptyTotals();
+    const byModel = {}; // model → { tokens, cost, sessions }
 
     for (const file of scanned) {
       try {
-        const session = scanSession(file);
+        const session = scanSession(file, sessionIndex);
         if (session && session.totalTokens > 0) {
           sessions.push(session);
           totals.input += session.input;
@@ -87,9 +172,17 @@ export function collectEnrichment(opts = {}) {
           totals.totalTokens += session.totalTokens;
           totals.costTotal += session.costTotal;
           totals.messageCount += session.messageCount;
+
+          // Aggregate by model
+          const model = session.model || "unknown";
+          if (!byModel[model]) {
+            byModel[model] = { tokens: 0, cost: 0, sessions: 0 };
+          }
+          byModel[model].tokens += session.totalTokens;
+          byModel[model].cost += session.costTotal;
+          byModel[model].sessions += 1;
         }
       } catch {
-        // Skip broken files silently
         continue;
       }
     }
@@ -100,7 +193,8 @@ export function collectEnrichment(opts = {}) {
     return {
       available: true,
       sessions,
-      totals,
+      totals: { ...totals, costTotal: Number(totals.costTotal.toFixed(6)) },
+      byModel,
       scannedFiles: scanned.length,
       lookbackHours,
     };
@@ -128,18 +222,21 @@ function emptyTotals() {
  * Scan a single session JSONL file for usage data.
  * Reads only the last MAX_BYTES_PER_FILE bytes for large files to stay fast.
  */
-function scanSession(file) {
+function scanSession(file, sessionIndex) {
+  const sessionId = file.name.replace(".jsonl", "");
+
+  // Resolve metadata from sessions.json index
+  const meta = sessionIndex.get(sessionId) || {};
+
   let raw;
   try {
     const stat = fs.statSync(file.path);
     if (stat.size > MAX_BYTES_PER_FILE) {
-      // Read only the tail — we'll miss some early entries but stay fast
       const fd = fs.openSync(file.path, "r");
       const buf = Buffer.alloc(MAX_BYTES_PER_FILE);
       fs.readSync(fd, buf, 0, MAX_BYTES_PER_FILE, stat.size - MAX_BYTES_PER_FILE);
       fs.closeSync(fd);
       raw = buf.toString("utf8");
-      // Drop the first partial line (we likely cut mid-line)
       const firstNewline = raw.indexOf("\n");
       if (firstNewline > 0) raw = raw.slice(firstNewline + 1);
     } else {
@@ -148,9 +245,10 @@ function scanSession(file) {
   } catch {
     return null;
   }
+
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
-  let sessionKey = null;
+  let model = meta.model || null;
   let input = 0;
   let output = 0;
   let cacheRead = 0;
@@ -163,41 +261,39 @@ function scanSession(file) {
     try {
       const entry = JSON.parse(line);
 
-      // Extract session key from session header
-      if (entry.type === "session" && entry.id) {
-        // session id is the UUID, not the key — but it's what we have
-        sessionKey = entry.id;
+      // Pick up model from model-snapshot custom entries (most recent wins)
+      if (
+        entry.type === "custom" &&
+        entry.customType === "model-snapshot" &&
+        entry.data?.modelId
+      ) {
+        model = entry.data.modelId;
       }
 
       // Extract usage from message entries
       if (entry.type === "message") {
         const usage = entry.usage || entry.message?.usage;
         if (usage) {
-          const inp = usage.input || 0;
-          const out = usage.output || 0;
-          const cr = usage.cacheRead || 0;
-          const cw = usage.cacheWrite || 0;
-          const tt = usage.totalTokens || 0;
-          const ct = usage.cost?.total || 0;
-
-          input += inp;
-          output += out;
-          cacheRead += cr;
-          cacheWrite += cw;
-          totalTokens += tt;
-          costTotal += ct;
+          input += usage.input || 0;
+          output += usage.output || 0;
+          cacheRead += usage.cacheRead || 0;
+          cacheWrite += usage.cacheWrite || 0;
+          totalTokens += usage.totalTokens || 0;
+          costTotal += usage.cost?.total || 0;
           messageCount++;
         }
       }
     } catch {
-      // Skip unparseable lines
       continue;
     }
   }
 
   return {
-    sessionId: file.name.replace(".jsonl", ""),
-    sessionKey: sessionKey || file.name.replace(".jsonl", ""),
+    sessionId,
+    label: meta.label || humanizeSessionKey(meta.key),
+    agent: meta.agent || file.agent || "unknown",
+    model,
+    chatType: meta.chatType || null,
     input,
     output,
     cacheRead,
@@ -208,14 +304,11 @@ function scanSession(file) {
   };
 }
 
+// ─── Formatting ──────────────────────────────────────────────────────────────
+
 /**
  * Format enrichment data into a text block for appending to the report.
  * Returns null if enrichment is unavailable or empty.
- *
- * @param {object} enrichment - result from collectEnrichment()
- * @param {object} opts
- * @param {number} opts.maxSessions - max sessions to show (default: 8)
- * @returns {string|null}
  */
 export function formatEnrichment(enrichment, opts = {}) {
   try {
@@ -224,6 +317,7 @@ export function formatEnrichment(enrichment, opts = {}) {
     const maxSessions = opts.maxSessions || 8;
     const totals = enrichment.totals;
     const sessions = enrichment.sessions.slice(0, maxSessions);
+    const byModel = enrichment.byModel || {};
 
     const lines = [];
     const period = enrichment.lookbackHours
@@ -234,21 +328,35 @@ export function formatEnrichment(enrichment, opts = {}) {
 
     for (const s of sessions) {
       const tokens = Number(s.totalTokens).toLocaleString();
-      const cost = s.costTotal > 0 ? ` ($${s.costTotal.toFixed(2)})` : "";
-      const label = truncateSessionId(s.sessionId);
-      lines.push(`  ${label} — ${tokens} tokens${cost}`);
+      const cost = s.costTotal > 0 ? ` · $${s.costTotal.toFixed(2)}` : "";
+      const modelTag = s.model ? ` [${shortModel(s.model)}]` : "";
+      const label = s.label || s.sessionId.slice(0, 12);
+      lines.push(`  ${label}${modelTag} — ${tokens} tok${cost}`);
     }
 
     if (enrichment.sessions.length > maxSessions) {
       const remaining = enrichment.sessions.length - maxSessions;
-      lines.push(`  ... and ${remaining} more sessions`);
+      lines.push(`  ... +${remaining} more`);
     }
 
-    // Totals line
+    // Model breakdown
+    const modelEntries = Object.entries(byModel)
+      .sort((a, b) => b[1].tokens - a[1].tokens);
+
+    if (modelEntries.length > 1) {
+      lines.push(`\nBy Model:`);
+      for (const [m, data] of modelEntries) {
+        const tokens = Number(data.tokens).toLocaleString();
+        const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
+        lines.push(`  ${shortModel(m)}: ${tokens} tok (${data.sessions} session${data.sessions > 1 ? "s" : ""})${cost}`);
+      }
+    }
+
+    // Totals
     const totalTok = Number(totals.totalTokens).toLocaleString();
     const totalCost =
-      totals.costTotal > 0 ? ` ($${totals.costTotal.toFixed(2)})` : "";
-    lines.push(`  Total: ${totalTok} tokens${totalCost}`);
+      totals.costTotal > 0 ? ` · $${totals.costTotal.toFixed(2)}` : "";
+    lines.push(`\nTotal: ${totalTok} tokens${totalCost}`);
 
     return lines.join("\n");
   } catch {
@@ -257,9 +365,14 @@ export function formatEnrichment(enrichment, opts = {}) {
 }
 
 /**
- * Shorten a UUID session id to something readable.
+ * Shorten model names for display.
  */
-function truncateSessionId(id) {
-  if (!id || id.length <= 16) return id || "unknown";
-  return id.slice(0, 8) + "…" + id.slice(-4);
+function shortModel(model) {
+  if (!model) return "?";
+  // Remove provider prefixes and common suffixes
+  return model
+    .replace(/^(openai-codex|anthropic|google-antigravity|venice|nvidia|ollama)\//, "")
+    .replace(/^moonshotai\//, "")
+    .replace(/-instruct$/, "")
+    .replace(/-preview$/, "");
 }
