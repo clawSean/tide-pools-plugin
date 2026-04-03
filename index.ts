@@ -32,7 +32,7 @@ function runCli(options: {
   }
 
   const cmd = `node ${JSON.stringify(cli)} ${flags.join(" ")}`;
-  const text = execSync(cmd, { encoding: "utf8", timeout: 30000, stdio: ["ignore", "pipe", "pipe"] });
+  const text = execSync(cmd, { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] });
   return { text: text.trim() };
 }
 

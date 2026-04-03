@@ -6,7 +6,7 @@
 
 import { execSync } from "node:child_process";
 
-const TIMEOUT_MS = 20_000;
+const TIMEOUT_MS = 30_000;
 
 function run(cmd) {
   try {

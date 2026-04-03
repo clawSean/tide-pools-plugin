@@ -22,6 +22,10 @@ const DEFAULT_SESSIONS_DIR = path.join(
 // Only look at files modified in the last N hours for performance
 const DEFAULT_LOOKBACK_HOURS = 24;
 
+// Max bytes to read per file (tail read). Usage entries are spread throughout
+// but we get most value from recent messages. 256KB per file keeps things fast.
+const MAX_BYTES_PER_FILE = 256 * 1024;
+
 /**
  * Attempt to collect enrichment data from session JSONLs.
  *
@@ -64,8 +68,8 @@ export function collectEnrichment(opts = {}) {
       return { available: true, sessions: [], totals: emptyTotals() };
     }
 
-    // Cap file count to avoid scanning hundreds
-    const MAX_FILES = 50;
+    // Cap file count to keep scan time under a few seconds
+    const MAX_FILES = 20;
     const scanned = files.slice(0, MAX_FILES);
 
     const sessions = [];
@@ -122,9 +126,28 @@ function emptyTotals() {
 
 /**
  * Scan a single session JSONL file for usage data.
+ * Reads only the last MAX_BYTES_PER_FILE bytes for large files to stay fast.
  */
 function scanSession(file) {
-  const raw = fs.readFileSync(file.path, "utf8");
+  let raw;
+  try {
+    const stat = fs.statSync(file.path);
+    if (stat.size > MAX_BYTES_PER_FILE) {
+      // Read only the tail — we'll miss some early entries but stay fast
+      const fd = fs.openSync(file.path, "r");
+      const buf = Buffer.alloc(MAX_BYTES_PER_FILE);
+      fs.readSync(fd, buf, 0, MAX_BYTES_PER_FILE, stat.size - MAX_BYTES_PER_FILE);
+      fs.closeSync(fd);
+      raw = buf.toString("utf8");
+      // Drop the first partial line (we likely cut mid-line)
+      const firstNewline = raw.indexOf("\n");
+      if (firstNewline > 0) raw = raw.slice(firstNewline + 1);
+    } else {
+      raw = fs.readFileSync(file.path, "utf8");
+    }
+  } catch {
+    return null;
+  }
   const lines = raw.split(/\r?\n/).filter(Boolean);
 
   let sessionKey = null;

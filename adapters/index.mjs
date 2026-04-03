@@ -23,7 +23,7 @@ const ADAPTERS = [
 /**
  * Run a single adapter with timeout protection.
  */
-async function runAdapter(adapter, timeoutMs = 15_000) {
+async function runAdapter(adapter, timeoutMs = 35_000) {
   try {
     if (!adapter.module.isAvailable()) {
       return {
