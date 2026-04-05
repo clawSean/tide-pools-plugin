@@ -1,4 +1,4 @@
-# Tide Pool Plugin 🌊🦞✨
+# Tide Pools Plugin 🌊🦞✨
 
 A cheerful little OpenClaw plugin that gives you **provider usage at a glance** with **zero LLM inference** for command handling.
 
@@ -47,7 +47,7 @@ Put the plugin here on your OpenClaw host:
 
 ```text
 ~/.openclaw/extensions/
-└── tide-pool/
+└── tide-pools/
     ├── openclaw.plugin.json
     ├── index.ts
     ├── usage-core.mjs
@@ -57,8 +57,8 @@ Put the plugin here on your OpenClaw host:
 
 Then ensure your `openclaw.json` includes:
 
-• `plugins.allow` contains `"tide-pool"`  
-• `plugins.entries["tide-pool"].enabled = true`
+• `plugins.allow` contains `"tide-pools"`  
+• `plugins.entries["tide-pools"].enabled = true`
 
 Then restart gateway. ✅
 
@@ -66,21 +66,21 @@ Then restart gateway. ✅
 
 ## 🪙 Venice support
 
-If `openclaw status --usage` doesn’t show Venice directly, Tide Pool can enrich output via:
+If `openclaw status --usage` doesn’t show Venice directly, Tide Pools can enrich output via:
 
 `~/.openclaw/extensions/diem/diem.py`
 
-If that script is missing/unavailable, Tide Pool still works and reports Venice as unavailable.
+If that script is missing/unavailable, Tide Pools still works and reports Venice as unavailable.
 
 ---
 
 ## 🤝 Bottom Feeder integration
 
-Bottom Feeder can consume Tide Pool directly via:
+Bottom Feeder can consume Tide Pools directly via:
 
 `skills/bottom-feeder/scripts/provider-usage.sh`
 
-It checks Tide Pool first, then legacy lobster path, then falls back to `openclaw status --usage --json`.
+It checks Tide Pools first, then legacy lobster path, then falls back to `openclaw status --usage --json`.
 
 ---
 

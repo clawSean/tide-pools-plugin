@@ -173,7 +173,7 @@ function resolveCachePath(customPath) {
   if (customPath) return customPath;
   if (process.env.TIDE_POOL_CACHE_PATH) return process.env.TIDE_POOL_CACHE_PATH;
   if (process.env.LOBSTER_USAGE_CACHE_PATH) return process.env.LOBSTER_USAGE_CACHE_PATH;
-  return path.join(os.tmpdir(), "openclaw-tide-pool-cache.json");
+  return path.join(os.tmpdir(), "openclaw-tide-pools-cache.json");
 }
 
 function readCache(cachePath, ttlMs) {
@@ -284,7 +284,7 @@ function formatVeniceLine(venice) {
 
 export function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
-  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pool";
+  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pools";
 
   const lines = [heading];
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];

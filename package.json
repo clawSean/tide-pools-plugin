@@ -1,11 +1,12 @@
 {
-  "name": "@openclaw-ext/tide-pool",
+  "name": "@openclaw-ext/tide-pools",
   "version": "1.6.0",
   "private": true,
   "type": "module",
   "description": "OpenClaw quota usage plugin and CLI with optional Venice augmentation",
   "main": "index.ts",
   "bin": {
+    "tide-pools": "cli.mjs",
     "tide-pool": "cli.mjs",
     "lobster-usage": "cli.mjs"
   },
