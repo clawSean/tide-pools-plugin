@@ -12,34 +12,43 @@ function runCli(options: {
   theme?: "tide" | "plain";
   format?: "text" | "json";
   noVenice?: boolean;
+  noEnrich?: boolean;
   noCache?: boolean;
   cacheTtlMs?: number;
+  lookbackHours?: number;
 }) {
   const cli = resolveCliPath();
   const flags: string[] = [];
   flags.push(`--format ${options.format || "text"}`);
   flags.push(`--theme ${options.theme || "plain"}`);
   if (options.noVenice) flags.push("--no-venice");
+  if (options.noEnrich) flags.push("--no-enrich");
   if (options.noCache) flags.push("--no-cache");
   if (typeof options.cacheTtlMs === "number" && !Number.isNaN(options.cacheTtlMs)) {
     flags.push(`--cache-ttl-ms ${Math.max(0, Math.round(options.cacheTtlMs))}`);
   }
+  if (typeof options.lookbackHours === "number" && !Number.isNaN(options.lookbackHours)) {
+    flags.push(`--lookback-hours ${Math.max(1, Math.round(options.lookbackHours))}`);
+  }
 
   const cmd = `node ${JSON.stringify(cli)} ${flags.join(" ")}`;
-  const text = execSync(cmd, { encoding: "utf8", timeout: 20000, stdio: ["ignore", "pipe", "pipe"] });
+  const text = execSync(cmd, { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] });
   return { text: text.trim() };
 }
 
 function parseQuotaArgs(raw: string | undefined) {
   const args = String(raw || "").trim();
   const has = (re: RegExp) => re.test(args);
-  const match = args.match(/--cache-ttl-ms\s+(\d+)/i);
+  const matchCacheTtl = args.match(/--cache-ttl-ms\s+(\d+)/i);
+  const matchLookback = args.match(/--lookback-hours\s+(\d+)/i);
 
   return {
     format: has(/(?:^|\s)(--json|json)(?:\s|$)/i) ? "json" : "text",
     noVenice: has(/(?:^|\s)--no-venice(?:\s|$)/i),
+    noEnrich: has(/(?:^|\s)--no-enrich(?:\s|$)/i),
     noCache: has(/(?:^|\s)--no-cache(?:\s|$)/i),
-    cacheTtlMs: match ? Number(match[1]) : undefined,
+    cacheTtlMs: matchCacheTtl ? Number(matchCacheTtl[1]) : undefined,
+    lookbackHours: matchLookback ? Number(matchLookback[1]) : undefined,
   } as const;
 }
 
@@ -53,25 +62,8 @@ export default function register(api: any) {
   };
 
   api.registerCommand({
-    name: "tide_pools",
-    description: "Tide Pools all-provider quota report (no LLM inference)",
-    acceptsArgs: false,
-    requireAuth: true,
-    handler: tideHandler,
-  });
-
-  api.registerCommand({
     name: "tidepools",
-    description: "Alias for /tide_pools",
-    acceptsArgs: false,
-    requireAuth: true,
-    handler: tideHandler,
-  });
-
-  // Backward compatibility alias
-  api.registerCommand({
-    name: "lobster_usage",
-    description: "Alias for /tide_pools",
+    description: "Tide Pools all-provider quota report with session breakdown (no LLM inference)",
     acceptsArgs: false,
     requireAuth: true,
     handler: tideHandler,
@@ -79,7 +71,8 @@ export default function register(api: any) {
 
   api.registerCommand({
     name: "quota_all",
-    description: "All provider quota windows (supports: --json, --no-venice, --no-cache)",
+    description:
+      "All provider quota windows (supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N)",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx: any) => {
@@ -89,8 +82,10 @@ export default function register(api: any) {
           theme: "plain",
           format: parsed.format,
           noVenice: parsed.noVenice,
+          noEnrich: parsed.noEnrich,
           noCache: parsed.noCache,
           cacheTtlMs: parsed.cacheTtlMs,
+          lookbackHours: parsed.lookbackHours,
         });
       } catch (err: any) {
         return { text: `Quota probe failed.\n${err?.message || String(err)}` };
@@ -99,6 +94,6 @@ export default function register(api: any) {
   });
 
   api.logger?.info?.(
-    "[tide-pools] Plugin loaded - /tide_pools (/tidepools, /lobster_usage aliases) and /quota_all registered (standalone; cache+json)",
+    "[tide-pools] Plugin loaded v2 — /tidepools, /quota_all (adapters + enrichment)"
   );
 }
