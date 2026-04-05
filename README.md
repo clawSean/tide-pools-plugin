@@ -17,14 +17,14 @@ Think of it as your quota shoreline: one look, and you know what’s still swimm
 
 ## 🗣️ Commands
 
-• `/tide_pool`  
+• `/tide_pools`  
   Tide-themed human-readable status board 🌊
 
-• `/tidepool`  
-  Alias for `/tide_pool`
+• `/tidepools`  
+  Alias for `/tide_pools`
 
 • `/lobster_usage`  
-  Legacy alias for `/tide_pool` (kept for compatibility)
+  Legacy alias for `/tide_pools` (kept for compatibility)
 
 • `/quota_all`  
   Plain status board
