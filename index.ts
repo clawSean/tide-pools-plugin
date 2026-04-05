@@ -57,7 +57,7 @@ export default function register(api: any) {
     try {
       return runCli({ theme: "tide", format: "text" });
     } catch (err: any) {
-      return { text: `🌊 Tide Pool sonar failed.\n${err?.message || String(err)}` };
+      return { text: `🌊 Tide Pools sonar failed.\n${err?.message || String(err)}` };
     }
   };
 
@@ -111,6 +111,6 @@ export default function register(api: any) {
   });
 
   api.logger?.info?.(
-    "[tide-pool] Plugin loaded v2 — /tide_pool, /tidepool, /lobster_usage, /quota_all (adapters + enrichment)"
+    "[tide-pools] Plugin loaded v2 — /tide_pool, /tidepool, /lobster_usage, /quota_all (adapters + enrichment)"
   );
 }

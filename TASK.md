@@ -1,7 +1,7 @@
-# Tide Pool v2 — Usage Truth Layer
+# Tide Pools v2 — Usage Truth Layer
 
 ## Goal
-Make Tide Pool's numbers match the actual provider dashboards. Add optional enrichment from local session logs.
+Make Tide Pools’ numbers match the actual provider dashboards. Add optional enrichment from local session logs.
 
 ## Current State (v1.6.0)
 - `usage-core.mjs` — single source: `openclaw status --usage --json` for provider quota windows
@@ -100,7 +100,7 @@ Auth: `codex auth` (one-time OAuth flow)
 
 ## Output Format (text, example)
 ```
-🌊 Tide Pool
+🌊 Tide Pools
 
 Providers:
 • OpenAI Codex [Pro]: 45% left (resets in 2h 15m) — via OAuth API
@@ -116,7 +116,7 @@ Session Breakdown (last 24h):
 
 If enrichment fails:
 ```
-🌊 Tide Pool
+🌊 Tide Pools
 
 Providers:
 • OpenAI Codex [Pro]: 45% left (resets in 2h 15m) — via OAuth API

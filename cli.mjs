@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Tide Pool CLI v2
+ * Tide Pools CLI v2
  *
  * Usage:
- *   tide-pool [options]
+ *   tide-pools [options]
  *
  * Options:
  *   --format text|json    Output format (default: text)
@@ -57,6 +57,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  process.stderr.write(`Tide Pool error: ${err?.message || String(err)}\n`);
+  process.stderr.write(`Tide Pools error: ${err?.message || String(err)}\n`);
   process.exit(1);
 });

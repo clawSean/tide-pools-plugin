@@ -1,5 +1,5 @@
 /**
- * Tide Pool v2 — Usage Core
+ * Tide Pools v2 — Usage Core
  *
  * Architecture:
  *   Layer 1 (Accuracy): Adapter registry fetches dashboard-accurate numbers
@@ -21,7 +21,7 @@ function resolveCachePath(customPath) {
   if (customPath) return customPath;
   if (process.env.TIDE_POOL_CACHE_PATH) return process.env.TIDE_POOL_CACHE_PATH;
   if (process.env.LOBSTER_USAGE_CACHE_PATH) return process.env.LOBSTER_USAGE_CACHE_PATH;
-  return path.join(os.tmpdir(), "openclaw-tide-pool-cache.json");
+  return path.join(os.tmpdir(), "openclaw-tide-pools-cache.json");
 }
 
 function readCache(cachePath, ttlMs) {
@@ -240,7 +240,7 @@ function formatSourceName(source) {
  */
 export async function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
-  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pool";
+  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pools";
   const includeEnrichment = opts.includeEnrichment !== false;
 
   const lines = [heading, ""];

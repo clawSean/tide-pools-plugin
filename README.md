@@ -1,4 +1,4 @@
-# Tide Pool v2 🌊🦞
+# Tide Pools v2 🌊🦞
 
 Provider usage at a glance — with **dashboard-accurate numbers** and session breakdowns.
 
@@ -60,13 +60,13 @@ npm install -g @openai/codex
 codex auth
 ```
 
-This creates `~/.codex/auth.json`. Tide Pool reads the OAuth token and hits OpenAI's usage endpoint directly — the same source the web dashboard uses. If the file doesn't exist, the adapter is silently skipped.
+This creates `~/.codex/auth.json`. Tide Pools reads the OAuth token and hits OpenAI's usage endpoint directly — the same source the web dashboard uses. If the file doesn't exist, the adapter is silently skipped.
 
 ---
 
 ## Enrichment
 
-When enabled (default), Tide Pool scans recent session JSONL logs to show:
+When enabled (default), Tide Pools scans recent session JSONL logs to show:
 
 - Per-session token usage (which sessions burned what)
 - Cost breakdown (when pricing data available)
@@ -84,7 +84,7 @@ Put the plugin in your OpenClaw extensions:
 
 ```
 ~/.openclaw/extensions/
-└── tide-pool/
+└── tide-pools/
     ├── openclaw.plugin.json
     ├── index.ts
     ├── usage-core.mjs
@@ -100,8 +100,8 @@ Put the plugin in your OpenClaw extensions:
 
 Ensure your `openclaw.json` includes:
 
-- `plugins.allow` contains `"tide-pool"`
-- `plugins.entries["tide-pool"].enabled = true`
+- `plugins.allow` contains `"tide-pools"`
+- `plugins.entries["tide-pools"].enabled = true`
 
 Restart gateway. ✅
 
@@ -110,7 +110,7 @@ Restart gateway. ✅
 ## Example Output
 
 ```
-🌊 Tide Pool
+🌊 Tide Pools
 
 • OpenAI Codex [plus]: 5h: 93% left (in 2h 15m) | Day: 48% left (in 4d 17h) — via OpenClaw status
 • Venice [Diem]: Diem: 1,247.3200 | Requests: 980/1000 (98% left) — via Diem API

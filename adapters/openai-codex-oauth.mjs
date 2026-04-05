@@ -72,7 +72,7 @@ function fetchJson(url, token) {
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          "User-Agent": "tide-pool/2.0",
+          "User-Agent": "tide-pools/2.0",
           Accept: "application/json",
         },
       },
