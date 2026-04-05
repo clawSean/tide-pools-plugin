@@ -54,7 +54,15 @@ export default function register(api: any) {
 
   api.registerCommand({
     name: "tide_pool",
-    description: "Tide-themed all-provider quota report (no LLM inference)",
+    description: "Tide Pools report (legacy alias)",
+    acceptsArgs: false,
+    requireAuth: true,
+    handler: tideHandler,
+  });
+
+  api.registerCommand({
+    name: "tide_pools",
+    description: "Tide Pools all-provider quota report (no LLM inference)",
     acceptsArgs: false,
     requireAuth: true,
     handler: tideHandler,
@@ -62,7 +70,15 @@ export default function register(api: any) {
 
   api.registerCommand({
     name: "tidepool",
-    description: "Alias for /tide_pool",
+    description: "Alias for /tide_pools",
+    acceptsArgs: false,
+    requireAuth: true,
+    handler: tideHandler,
+  });
+
+  api.registerCommand({
+    name: "tidepools",
+    description: "Alias for /tide_pools",
     acceptsArgs: false,
     requireAuth: true,
     handler: tideHandler,
@@ -71,7 +87,7 @@ export default function register(api: any) {
   // Backward compatibility alias
   api.registerCommand({
     name: "lobster_usage",
-    description: "Alias for /tide_pool",
+    description: "Alias for /tide_pools",
     acceptsArgs: false,
     requireAuth: true,
     handler: tideHandler,
@@ -99,6 +115,6 @@ export default function register(api: any) {
   });
 
   api.logger?.info?.(
-    "[tide-pools] Plugin loaded - /tide_pool (/tidepool, /lobster_usage alias) and /quota_all registered (standalone; cache+json)",
+    "[tide-pools] Plugin loaded - /tide_pools (/tide_pool, /tidepool, /tidepools, /lobster_usage aliases) and /quota_all registered (standalone; cache+json)",
   );
 }
