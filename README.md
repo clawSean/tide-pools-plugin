@@ -23,9 +23,7 @@ Layer 2 is 100% optional. If it fails, the report renders perfectly without it.
 
 | Command | Description |
 |---------|-------------|
-| `/tide_pool` | Tide-themed report (providers + session breakdown) |
-| `/tidepool` | Alias |
-| `/lobster_usage` | Legacy alias |
+| `/tidepools` | Tide-themed report (providers + session breakdown) |
 | `/quota_all` | Plain report (supports flags below) |
 
 ### Flags on `/quota_all`
