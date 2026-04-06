@@ -3,7 +3,7 @@
  *
  * Manages all source adapters and resolves the best data per provider.
  * Rules:
- *  - Direct provider adapters (e.g. openai-codex-oauth) beat generic ones (openclaw-status)
+ *  - Direct provider adapters (e.g. openai-codex-oauth, anthropic-cli-usage) beat generic ones (openclaw-status)
  *  - If a direct adapter fails, fall back to openclaw-status data for that provider
  *  - Every adapter runs with its own timeout + try/catch — one failure never blocks others
  *  - Venice is special (uses Diem, not standard windows) — handled in formatting
@@ -11,11 +11,13 @@
 
 import * as openclawStatus from "./openclaw-status.mjs";
 import * as openaiCodexOauth from "./openai-codex-oauth.mjs";
+import * as anthropicCliUsage from "./anthropic-cli-usage.mjs";
 import * as veniceDiem from "./venice-diem.mjs";
 
 /** All registered adapters, ordered by priority (direct > generic) */
 const ADAPTERS = [
   { module: openaiCodexOauth, priority: 10, direct: true },
+  { module: anthropicCliUsage, priority: 10, direct: true },
   { module: veniceDiem, priority: 10, direct: true },
   { module: openclawStatus, priority: 0, direct: false },
 ];
@@ -23,7 +25,7 @@ const ADAPTERS = [
 /**
  * Run a single adapter with timeout protection.
  */
-async function runAdapter(adapter, timeoutMs = 35_000) {
+async function runAdapter(adapter, timeoutMs = 35_000, context = {}) {
   try {
     if (!adapter.module.isAvailable()) {
       return {
@@ -35,7 +37,7 @@ async function runAdapter(adapter, timeoutMs = 35_000) {
     }
 
     const result = await Promise.race([
-      adapter.module.probe(),
+      adapter.module.probe(context),
       new Promise((_, reject) =>
         setTimeout(() => reject(new Error("Adapter timed out")), timeoutMs)
       ),
@@ -73,16 +75,18 @@ async function runAdapter(adapter, timeoutMs = 35_000) {
 export async function resolveAll(opts = {}) {
   const includeVenice = opts.includeVenice !== false;
   const timeoutMs = opts.adapterTimeoutMs || 15_000;
+  const anthropicSource = String(opts.anthropicSource || "auto").toLowerCase();
 
   // Filter adapters
   const active = ADAPTERS.filter((a) => {
     if (!includeVenice && a.module.id === "venice-diem") return false;
+    if (anthropicSource === "api" && a.module.id === "anthropic-cli-usage") return false;
     return true;
   });
 
   // Run all adapters in parallel
   const adapterResults = await Promise.all(
-    active.map((a) => runAdapter(a, timeoutMs))
+    active.map((a) => runAdapter(a, timeoutMs, { anthropicSource }))
   );
 
   // Collect provider data, keyed by provider id

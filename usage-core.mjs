@@ -24,23 +24,28 @@ function resolveCachePath(customPath) {
   return path.join(os.tmpdir(), "openclaw-tide-pools-cache.json");
 }
 
-function readCache(cachePath, ttlMs) {
+function readCache(cachePath, ttlMs, cacheKey = null) {
   if (!ttlMs || ttlMs <= 0) return null;
   try {
     const raw = fs.readFileSync(cachePath, "utf8");
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed.cachedAtMs !== "number" || !parsed.snapshot) return null;
     if (Date.now() - parsed.cachedAtMs > ttlMs) return null;
+    if (cacheKey) {
+      const expected = JSON.stringify(cacheKey);
+      const actual = JSON.stringify(parsed.cacheKey || null);
+      if (expected !== actual) return null;
+    }
     return parsed.snapshot;
   } catch {
     return null;
   }
 }
 
-function writeCache(cachePath, snapshot) {
+function writeCache(cachePath, snapshot, cacheKey = null) {
   try {
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, JSON.stringify({ cachedAtMs: Date.now(), snapshot }));
+    fs.writeFileSync(cachePath, JSON.stringify({ cachedAtMs: Date.now(), snapshot, cacheKey }));
   } catch {
     // best-effort cache
   }
@@ -122,15 +127,17 @@ function countdown(resetAt) {
 export async function collectUsageSnapshot(opts = {}) {
   const includeVenice = opts.includeVenice !== false;
   const includeEnrichment = opts.includeEnrichment !== false;
+  const anthropicSource = String(opts.anthropicSource || "auto").toLowerCase();
   const cacheTtlMs = Number.isFinite(opts.cacheTtlMs)
     ? Number(opts.cacheTtlMs)
     : DEFAULT_CACHE_TTL_MS;
   const cachePath = resolveCachePath(opts.cachePath);
   const bypassCache = opts.bypassCache === true;
+  const cacheKey = { includeVenice, includeEnrichment, anthropicSource };
 
   // Check cache
   if (!bypassCache) {
-    const cached = readCache(cachePath, cacheTtlMs);
+    const cached = readCache(cachePath, cacheTtlMs, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -140,7 +147,10 @@ export async function collectUsageSnapshot(opts = {}) {
   }
 
   // Layer 1: Adapter resolution
-  const resolved = await resolveAll({ includeVenice });
+  const resolved = await resolveAll({
+    includeVenice,
+    anthropicSource,
+  });
 
   // Layer 2: Enrichment (fault-isolated)
   let enrichment = null;
@@ -159,7 +169,7 @@ export async function collectUsageSnapshot(opts = {}) {
   };
 
   // Write cache
-  if (!bypassCache && cacheTtlMs > 0) writeCache(cachePath, snapshot);
+  if (!bypassCache && cacheTtlMs > 0) writeCache(cachePath, snapshot, cacheKey);
 
   return {
     ...snapshot,
@@ -169,6 +179,55 @@ export async function collectUsageSnapshot(opts = {}) {
 
 // ─── Formatting ──────────────────────────────────────────────────────────────
 
+function anthropicResetText(w) {
+  if (w?.resetIn) return `in ${w.resetIn}`;
+  return countdown(w?.resetAt);
+}
+
+function formatAnthropicLine(p, sourceTag) {
+  const name = p.displayName || "Anthropic";
+  const plan = p.plan ? ` [${p.plan}]` : "";
+  const windows = Array.isArray(p.windows) ? p.windows : [];
+
+  const byLabel = Object.fromEntries(windows.map((w) => [String(w.label || "").toLowerCase(), w]));
+  const five = byLabel["5h"];
+  const week = byLabel["week"];
+  const apiMonth = byLabel["api-month"];
+  const extra = byLabel["extra"];
+
+  const chunks = [];
+  if (five) {
+    const leftTxt = five.leftPercent != null ? `${five.leftPercent}% left` : "left unknown";
+    chunks.push(`5h: ${leftTxt} (${anthropicResetText(five)})`);
+  }
+  if (week) {
+    const leftTxt = week.leftPercent != null ? `${week.leftPercent}% left` : "left unknown";
+    chunks.push(`week: ${leftTxt} (${anthropicResetText(week)})`);
+  }
+  if (apiMonth) {
+    const leftTxt = apiMonth.leftPercent != null ? `${apiMonth.leftPercent}% left` : "left unknown";
+    chunks.push(`api-month: ${leftTxt} (${anthropicResetText(apiMonth)})`);
+  }
+
+  const head = chunks.length
+    ? `• ${name}${plan}: ${chunks.join(" | ")}${sourceTag}`
+    : `• ${name}${plan}: no quota windows${sourceTag}`;
+
+  const extraParts = [];
+  if (extra) {
+    if (extra.status) extraParts.push(`status ${extra.status}`);
+    if (extra.spentUsd != null && extra.limitUsd != null) {
+      extraParts.push(`$${Number(extra.spentUsd).toFixed(2)} / $${Number(extra.limitUsd).toFixed(2)} spent`);
+    }
+    if (extra.availableUsd != null) extraParts.push(`$${Number(extra.availableUsd).toFixed(2)} available`);
+    if (extra.overUsd != null && Number(extra.overUsd) > 0) extraParts.push(`over by $${Number(extra.overUsd).toFixed(2)}`);
+    if (extra.resetAt || extra.resetIn) extraParts.push(`reset ${anthropicResetText(extra)}`);
+  }
+
+  if (!extraParts.length) return head;
+  return `${head}\n  ↳ extra: ${extraParts.join(" · ")}`;
+}
+
 function formatProviderLine(p) {
   const name = p.displayName || p.provider || "Unknown provider";
   const plan = p.plan ? ` [${p.plan}]` : "";
@@ -177,6 +236,11 @@ function formatProviderLine(p) {
   // Venice is special: uses Diem balance + rate limits
   if (p.provider === "venice") {
     return formatVeniceLine(p, sourceTag);
+  }
+
+  // Anthropic is special: subscription windows + extra usage details
+  if (String(p.provider || "").toLowerCase() === "anthropic") {
+    return formatAnthropicLine(p, sourceTag);
   }
 
   if (p.error) return `• ${name}${plan}: unavailable — ${p.error}${sourceTag}`;
@@ -224,6 +288,7 @@ function formatVeniceLine(p, sourceTag) {
 function formatSourceName(source) {
   const map = {
     "openai-codex-oauth": "OAuth API",
+    "anthropic-cli-usage": "Claude /usage",
     "openclaw-status": "OpenClaw status",
     "venice-diem": "Diem API",
   };

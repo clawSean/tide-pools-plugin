@@ -14,6 +14,8 @@
  *   --no-cache            Bypass cache
  *   --cache-ttl-ms N      Override cache TTL in ms (default: 45000)
  *   --lookback-hours N    Enrichment lookback period (default: 24)
+ *   --anthropic-source auto|api|subscription
+ *                        Anthropic source selection (default: auto)
  */
 
 import { collectUsageSnapshot, formatUsageReport } from "./usage-core.mjs";
@@ -34,6 +36,10 @@ const cacheTtlMsRaw = parseArgValue(argv, "--cache-ttl-ms", null);
 const cacheTtlMs = cacheTtlMsRaw == null ? undefined : Number(cacheTtlMsRaw);
 const lookbackRaw = parseArgValue(argv, "--lookback-hours", null);
 const lookbackHours = lookbackRaw == null ? undefined : Number(lookbackRaw);
+const anthropicSourceRaw = String(parseArgValue(argv, "--anthropic-source", "auto") || "auto").toLowerCase();
+const anthropicSource = ["auto", "api", "subscription"].includes(anthropicSourceRaw)
+  ? anthropicSourceRaw
+  : "auto";
 
 async function main() {
   const snapshot = await collectUsageSnapshot({
@@ -42,6 +48,7 @@ async function main() {
     bypassCache: noCache,
     cacheTtlMs,
     enrichmentLookbackHours: lookbackHours,
+    anthropicSource,
   });
 
   if (format === "json") {

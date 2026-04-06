@@ -17,6 +17,7 @@
     "adapters/index.mjs",
     "adapters/openclaw-status.mjs",
     "adapters/openai-codex-oauth.mjs",
+    "adapters/anthropic-cli-usage.mjs",
     "adapters/venice-diem.mjs",
     "index.ts",
     "openclaw.plugin.json",
