@@ -39,6 +39,7 @@ function runCli(options: {
   noCache?: boolean;
   cacheTtlMs?: number;
   lookbackHours?: number;
+  anthropicSource?: "auto" | "api" | "subscription";
 }) {
   const cli = resolveCliPath();
   const flags: string[] = [];
@@ -54,6 +55,9 @@ function runCli(options: {
   if (typeof options.lookbackHours === "number" && !Number.isNaN(options.lookbackHours)) {
     flags.push(`--lookback-hours ${Math.max(1, Math.round(options.lookbackHours))}`);
   }
+  if (options.anthropicSource) {
+    flags.push(`--anthropic-source ${options.anthropicSource}`);
+  }
 
   const cmd = `node ${JSON.stringify(cli)} ${flags.join(" ")}`;
   const text = execSync(cmd, { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] });
@@ -65,6 +69,7 @@ function parseQuotaArgs(raw: string | undefined) {
   const has = (re: RegExp) => re.test(args);
   const matchCacheTtl = args.match(/--cache-ttl-ms\s+(\d+)/i);
   const matchLookback = args.match(/--lookback-hours\s+(\d+)/i);
+  const matchAnthropicSource = args.match(/--anthropic-source\s+(auto|api|subscription)/i);
 
   return {
     format: has(/(?:^|\s)(--json|json)(?:\s|$)/i) ? "json" : "text",
@@ -73,13 +78,24 @@ function parseQuotaArgs(raw: string | undefined) {
     noCache: has(/(?:^|\s)--no-cache(?:\s|$)/i),
     cacheTtlMs: matchCacheTtl ? Number(matchCacheTtl[1]) : undefined,
     lookbackHours: matchLookback ? Number(matchLookback[1]) : undefined,
+    anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() as "auto" | "api" | "subscription" : undefined,
   } as const;
 }
 
 export default function register(api: any) {
-  const tideHandler = async () => {
+  const tideHandler = async (ctx: any) => {
     try {
-      return runCli({ theme: "tide", format: "text" });
+      const parsed = parseQuotaArgs(ctx?.args);
+      return runCli({
+        theme: "tide",
+        format: parsed.format,
+        noVenice: parsed.noVenice,
+        noEnrich: parsed.noEnrich,
+        noCache: parsed.noCache,
+        cacheTtlMs: parsed.cacheTtlMs,
+        lookbackHours: parsed.lookbackHours,
+        anthropicSource: parsed.anthropicSource,
+      });
     } catch (err: any) {
       return { text: `🌊 Tide Pools sonar failed.\n${err?.message || String(err)}` };
     }
@@ -87,8 +103,8 @@ export default function register(api: any) {
 
   api.registerCommand({
     name: "tidepools",
-    description: "Tide Pools all-provider quota report with session breakdown (no LLM inference)",
-    acceptsArgs: false,
+    description: "Tide Pools all-provider quota report with session breakdown (supports same flags as /quota_all)",
+    acceptsArgs: true,
     requireAuth: true,
     handler: tideHandler,
   });
@@ -96,7 +112,7 @@ export default function register(api: any) {
   api.registerCommand({
     name: "quota_all",
     description:
-      "All provider quota windows (supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N)",
+      "All provider quota windows (supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N, --anthropic-source auto|api|subscription)",
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx: any) => {
@@ -110,6 +126,7 @@ export default function register(api: any) {
           noCache: parsed.noCache,
           cacheTtlMs: parsed.cacheTtlMs,
           lookbackHours: parsed.lookbackHours,
+          anthropicSource: parsed.anthropicSource,
         });
       } catch (err: any) {
         return { text: `Quota probe failed.\n${err?.message || String(err)}` };
