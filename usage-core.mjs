@@ -225,7 +225,7 @@ function formatAnthropicLine(p, sourceTag) {
   }
 
   if (!extraParts.length) return head;
-  return `${head}\n• 💳 Extra usage: ${extraParts.join(" · ")}`;
+  return `${head}\n  └─ 💳 **Extra usage**: ${extraParts.join(" · ")}`;
 }
 
 function formatProviderLine(p) {
