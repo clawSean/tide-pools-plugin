@@ -59,9 +59,19 @@ function parseQuotaArgs(raw: string | undefined) {
 }
 
 export default function register(api: any) {
-  const tideHandler = async () => {
+  const tideHandler = async (ctx: any) => {
     try {
-      return runCli({ theme: "tide", format: "text" });
+      const parsed = parseQuotaArgs(ctx?.args);
+      return runCli({
+        theme: "tide",
+        format: parsed.format,
+        noVenice: parsed.noVenice,
+        noEnrich: parsed.noEnrich,
+        noCache: parsed.noCache,
+        cacheTtlMs: parsed.cacheTtlMs,
+        lookbackHours: parsed.lookbackHours,
+        anthropicSource: parsed.anthropicSource,
+      });
     } catch (err: any) {
       return { text: `🌊 Tide Pools sonar failed.\n${err?.message || String(err)}` };
     }
@@ -69,8 +79,8 @@ export default function register(api: any) {
 
   api.registerCommand({
     name: "tidepools",
-    description: "Tide Pools all-provider quota report with session breakdown (no LLM inference)",
-    acceptsArgs: false,
+    description: "Tide Pools all-provider quota report with session breakdown (supports same flags as /quota_all)",
+    acceptsArgs: true,
     requireAuth: true,
     handler: tideHandler,
   });
