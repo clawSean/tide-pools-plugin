@@ -210,8 +210,8 @@ function formatAnthropicLine(p, sourceTag) {
   }
 
   const head = chunks.length
-    ? `• ${name}${plan}: ${chunks.join(" | ")}${sourceTag}`
-    : `• ${name}${plan}: no quota windows${sourceTag}`;
+    ? `• **${name}${plan}**: ${chunks.join(" | ")}${sourceTag}`
+    : `• **${name}${plan}**: no quota windows${sourceTag}`;
 
   const extraParts = [];
   if (extra) {
@@ -225,7 +225,7 @@ function formatAnthropicLine(p, sourceTag) {
   }
 
   if (!extraParts.length) return head;
-  return `${head}\n  ↳ extra: ${extraParts.join(" · ")}`;
+  return `${head}\n• Extra usage: ${extraParts.join(" · ")}`;
 }
 
 function formatProviderLine(p) {
@@ -243,10 +243,10 @@ function formatProviderLine(p) {
     return formatAnthropicLine(p, sourceTag);
   }
 
-  if (p.error) return `• ${name}${plan}: unavailable — ${p.error}${sourceTag}`;
+  if (p.error) return `• **${name}${plan}**: unavailable — ${p.error}${sourceTag}`;
 
   const windows = Array.isArray(p.windows) ? p.windows : [];
-  if (!windows.length) return `• ${name}${plan}: no quota windows${sourceTag}`;
+  if (!windows.length) return `• **${name}${plan}**: no quota windows${sourceTag}`;
 
   const chunks = windows.map((w) => {
     const label = w.label || "window";
@@ -255,12 +255,12 @@ function formatProviderLine(p) {
     return `${label}: ${leftTxt} (${countdown(w.resetAt)})`;
   });
 
-  return `• ${name}${plan}: ${chunks.join(" | ")}${sourceTag}`;
+  return `• **${name}${plan}**: ${chunks.join(" | ")}${sourceTag}`;
 }
 
 function formatVeniceLine(p, sourceTag) {
   if (p.error && !p.diem && !p.requests && !p.tokens) {
-    return `• Venice [Diem]: unavailable — ${p.error}${sourceTag}`;
+    return `• **Venice [Diem]**: unavailable — ${p.error}${sourceTag}`;
   }
 
   const chunks = [];
@@ -279,10 +279,10 @@ function formatVeniceLine(p, sourceTag) {
   }
 
   if (!chunks.length) {
-    return `• Venice [Diem]: no balance data${sourceTag}`;
+    return `• **Venice [Diem]**: no balance data${sourceTag}`;
   }
 
-  return `• Venice [Diem]: ${chunks.join(" | ")}${sourceTag}`;
+  return `• **Venice [Diem]**: ${chunks.join(" | ")}${sourceTag}`;
 }
 
 function formatSourceName(source) {
@@ -305,14 +305,14 @@ function formatSourceName(source) {
  */
 export async function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
-  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pools";
+  const heading = theme === "plain" ? "**Provider Quota Board**" : "🌊 **Tide Pools**";
   const includeEnrichment = opts.includeEnrichment !== false;
 
-  const lines = [heading, "", "Providers"];
+  const lines = [heading, "", "**Providers**"];
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
 
   if (!providers.length) {
-    lines.push("• No provider usage data found (credentials/scope may be missing)");
+    lines.push("• **No provider usage data found** (credentials/scope may be missing)");
   } else {
     for (const p of providers) lines.push(formatProviderLine(p));
   }

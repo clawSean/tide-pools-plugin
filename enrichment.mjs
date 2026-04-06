@@ -343,7 +343,7 @@ export function formatEnrichment(enrichment, opts = {}) {
       (a, b) => b[1].tokens - a[1].tokens
     );
 
-    lines.push(`Usage · ${period}`);
+    lines.push(`**Usage · ${period}**`);
     for (const [cat, data] of catEntries) {
       const tokens = fmtTokens(data.tokens);
       const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
@@ -356,7 +356,7 @@ export function formatEnrichment(enrichment, opts = {}) {
     );
 
     if (modelEntries.length > 0) {
-      lines.push("", "Top model(s)");
+      lines.push("", "**Top model(s)**");
       for (const [m, data] of modelEntries) {
         const tokens = fmtTokens(data.tokens);
         const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
@@ -384,7 +384,7 @@ export function formatEnrichment(enrichment, opts = {}) {
     const totalTok = fmtTokens(totals.totalTokens);
     const totalCost =
       totals.costTotal > 0 ? ` · $${totals.costTotal.toFixed(2)}` : "";
-    lines.push("", "Total", `• ${totalTok} tok${totalCost}`);
+    lines.push("", "**Total**", `• ${totalTok} tok${totalCost}`);
 
     return lines.join("\n");
   } catch {
