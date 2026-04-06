@@ -225,7 +225,7 @@ function formatAnthropicLine(p, sourceTag) {
   }
 
   if (!extraParts.length) return head;
-  return `${head}\n• Extra usage: ${extraParts.join(" · ")}`;
+  return `${head}\n• 💳 Extra usage: ${extraParts.join(" · ")}`;
 }
 
 function formatProviderLine(p) {
@@ -305,10 +305,10 @@ function formatSourceName(source) {
  */
 export async function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
-  const heading = theme === "plain" ? "**Provider Quota Board**" : "🌊 **Tide Pools**";
+  const heading = theme === "plain" ? "📊 **Provider Quota Board**" : "🌊 **Tide Pools**";
   const includeEnrichment = opts.includeEnrichment !== false;
 
-  const lines = [heading, "", "**Providers**"];
+  const lines = [heading, "", "🛰️ **Providers**"];
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
 
   if (!providers.length) {
