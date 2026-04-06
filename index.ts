@@ -8,6 +8,29 @@ function resolveCliPath(): string {
   return path.join(here, "cli.mjs");
 }
 
+function stripControlChars(input: string): string {
+  // Keep newline, carriage return, and tab for readability; strip other control chars.
+  return input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+}
+
+function normalizeCliOutput(raw: string, format: "text" | "json"): string {
+  const cleaned = stripControlChars(raw || "").trim();
+  if (format !== "json") return cleaned;
+
+  // Guard against leading/trailing noise that can break downstream JSON parsing.
+  const first = cleaned.indexOf("{");
+  const last = cleaned.lastIndexOf("}");
+  const candidate = first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
+
+  try {
+    const parsed = JSON.parse(candidate);
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    // Fall back to cleaned text to avoid hard crash; caller can still inspect output.
+    return cleaned;
+  }
+}
+
 function runCli(options: {
   theme?: "tide" | "plain";
   format?: "text" | "json";
@@ -19,7 +42,8 @@ function runCli(options: {
 }) {
   const cli = resolveCliPath();
   const flags: string[] = [];
-  flags.push(`--format ${options.format || "text"}`);
+  const format = options.format || "text";
+  flags.push(`--format ${format}`);
   flags.push(`--theme ${options.theme || "plain"}`);
   if (options.noVenice) flags.push("--no-venice");
   if (options.noEnrich) flags.push("--no-enrich");
@@ -33,7 +57,7 @@ function runCli(options: {
 
   const cmd = `node ${JSON.stringify(cli)} ${flags.join(" ")}`;
   const text = execSync(cmd, { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] });
-  return { text: text.trim() };
+  return { text: normalizeCliOutput(text, format) };
 }
 
 function parseQuotaArgs(raw: string | undefined) {

@@ -282,12 +282,55 @@ function formatVeniceLine(venice) {
   return `• Venice [Diem]: ${chunks.join(" | ")}`;
 }
 
+function computeHealthStatus(snapshot) {
+  const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
+  if (!providers.length) {
+    return {
+      level: "red",
+      label: "RED",
+      emoji: "🔴",
+      hint: "No provider windows found. Check provider credentials/scope first.",
+    };
+  }
+
+  const unavailable = providers.filter((p) => p?.error).length;
+  if (unavailable >= providers.length) {
+    return {
+      level: "red",
+      label: "RED",
+      emoji: "🔴",
+      hint: "All providers unavailable. Check auth + gateway health.",
+    };
+  }
+
+  if (unavailable > 0) {
+    return {
+      level: "yellow",
+      label: "YELLOW",
+      emoji: "🟡",
+      hint: "Some providers degraded. Route heavy jobs to healthy providers.",
+    };
+  }
+
+  return {
+    level: "green",
+    label: "GREEN",
+    emoji: "🟢",
+    hint: "All configured providers reporting windows.",
+  };
+}
+
 export function formatUsageReport(snapshot, opts = {}) {
   const theme = opts.theme || "plain";
-  const heading = theme === "plain" ? "Provider Quota Board" : "🌊 Tide Pools";
-
-  const lines = [heading];
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
+  const health = computeHealthStatus(snapshot);
+
+  const heading =
+    theme === "plain"
+      ? `Provider Quota Board — ${health.emoji} ${health.label}`
+      : `🌊 Tide Pools — ${health.emoji} ${health.label}`;
+
+  const lines = [heading, "", "Provider Windows"];
 
   if (!providers.length) {
     lines.push("• No provider usage windows found. (Credentials/scope may be missing.)");
@@ -296,7 +339,18 @@ export function formatUsageReport(snapshot, opts = {}) {
   }
 
   const veniceLine = formatVeniceLine(snapshot?.venice || null);
-  if (veniceLine) lines.push(veniceLine);
+  if (veniceLine) {
+    lines.push("", "Optional Balances", veniceLine);
+  }
+
+  if (snapshot?.cache) {
+    const cacheLine = snapshot.cache.hit
+      ? `Cache: hit (${snapshot.cache.ttlMs}ms TTL)`
+      : `Cache: miss (${snapshot.cache.ttlMs}ms TTL)`;
+    lines.push("", cacheLine);
+  }
+
+  lines.push("", `Action: ${health.hint}`);
 
   return lines.join("\n");
 }
