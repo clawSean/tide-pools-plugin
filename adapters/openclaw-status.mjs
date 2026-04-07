@@ -4,26 +4,34 @@
  * This is the universal fallback: works for any provider OpenClaw tracks.
  */
 
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 
 const TIMEOUT_MS = 30_000;
 
-function run(cmd) {
-  try {
-    const stdout = execSync(cmd, {
+function run(cmd, signal) {
+  return new Promise((resolve) => {
+    const child = exec(cmd, {
       encoding: "utf8",
       timeout: TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"],
       shell: "/bin/bash",
+    }, (err, stdout, stderr) => {
+      if (err) {
+        resolve({
+          ok: false,
+          error: err?.message || String(err),
+          stdout: stdout || "",
+        });
+      } else {
+        resolve({ ok: true, stdout: stdout || "" });
+      }
     });
-    return { ok: true, stdout };
-  } catch (err) {
-    return {
-      ok: false,
-      error: err?.message || String(err),
-      stdout: err?.stdout ? String(err.stdout) : "",
-    };
-  }
+
+    if (signal) {
+      signal.addEventListener("abort", () => {
+        try { child.kill(); } catch {}
+      }, { once: true });
+    }
+  });
 }
 
 function firstJsonObject(raw) {
@@ -44,9 +52,9 @@ export function isAvailable() {
   return true;
 }
 
-export async function probe() {
+export async function probe(opts = {}) {
   try {
-    const result = run("openclaw status --usage --json 2>/dev/null");
+    const result = await run("openclaw status --usage --json 2>/dev/null", opts?.signal);
     if (!result.ok) {
       return {
         available: false,

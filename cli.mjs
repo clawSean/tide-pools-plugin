@@ -63,7 +63,7 @@ async function main() {
   process.stdout.write(`${report}\n`);
 }
 
-main().catch((err) => {
+main().then(() => process.exit(0)).catch((err) => {
   process.stderr.write(`Tide Pools error: ${err?.message || String(err)}\n`);
   process.exit(1);
 });

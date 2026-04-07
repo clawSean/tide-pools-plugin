@@ -4,7 +4,7 @@
  * Falls back gracefully if the script doesn't exist or fails.
  */
 
-import { execSync } from "node:child_process";
+import { exec } from "node:child_process";
 import fs from "node:fs";
 
 const DIEM_SCRIPT = `${process.env.HOME || "/root"}/.openclaw/extensions/diem/diem.py`;
@@ -83,11 +83,15 @@ export async function probe() {
 
     let stdout;
     try {
-      stdout = execSync(`python3 ${DIEM_SCRIPT}`, {
-        encoding: "utf8",
-        timeout: TIMEOUT_MS,
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: "/bin/bash",
+      stdout = await new Promise((resolve, reject) => {
+        exec(`python3 ${DIEM_SCRIPT}`, {
+          encoding: "utf8",
+          timeout: TIMEOUT_MS,
+          shell: "/bin/bash",
+        }, (err, out, stderr) => {
+          if (err) reject(Object.assign(err, { stderr }));
+          else resolve(out || "");
+        });
       });
     } catch (err) {
       const reason = (err?.stderr || err?.message || "diem script failed").trim();

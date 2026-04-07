@@ -8,29 +8,6 @@ function resolveCliPath(): string {
   return path.join(here, "cli.mjs");
 }
 
-function stripControlChars(input: string): string {
-  // Keep newline, carriage return, and tab for readability; strip other control chars.
-  return input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
-}
-
-function normalizeCliOutput(raw: string, format: "text" | "json"): string {
-  const cleaned = stripControlChars(raw || "").trim();
-  if (format !== "json") return cleaned;
-
-  // Guard against leading/trailing noise that can break downstream JSON parsing.
-  const first = cleaned.indexOf("{");
-  const last = cleaned.lastIndexOf("}");
-  const candidate = first >= 0 && last > first ? cleaned.slice(first, last + 1) : cleaned;
-
-  try {
-    const parsed = JSON.parse(candidate);
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    // Fall back to cleaned text to avoid hard crash; caller can still inspect output.
-    return cleaned;
-  }
-}
-
 function runCli(options: {
   theme?: "tide" | "plain";
   format?: "text" | "json";
@@ -43,8 +20,7 @@ function runCli(options: {
 }) {
   const cli = resolveCliPath();
   const flags: string[] = [];
-  const format = options.format || "text";
-  flags.push(`--format ${format}`);
+  flags.push(`--format ${options.format || "text"}`);
   flags.push(`--theme ${options.theme || "plain"}`);
   if (options.noVenice) flags.push("--no-venice");
   if (options.noEnrich) flags.push("--no-enrich");
@@ -61,7 +37,7 @@ function runCli(options: {
 
   const cmd = `node ${JSON.stringify(cli)} ${flags.join(" ")}`;
   const text = execSync(cmd, { encoding: "utf8", timeout: 60000, stdio: ["ignore", "pipe", "pipe"] });
-  return { text: normalizeCliOutput(text, format) };
+  return { text: text.trim() };
 }
 
 function parseQuotaArgs(raw: string | undefined) {
@@ -80,6 +56,19 @@ function parseQuotaArgs(raw: string | undefined) {
     lookbackHours: matchLookback ? Number(matchLookback[1]) : undefined,
     anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() as "auto" | "api" | "subscription" : undefined,
   } as const;
+}
+
+const TIDE_PROGRESS = [
+  "Observing the tides... 🔭👀",
+  "Checking the pools... 🏊‍♀️",
+  "The tides are coming in... 🦞",
+  "Listening for waves... 🐚",
+  "Scanning the reef... 🪸",
+  "Poking around the tidepools... 🦀",
+];
+
+function pickProgress() {
+  return TIDE_PROGRESS[Math.floor(Math.random() * TIDE_PROGRESS.length)];
 }
 
 export default function register(api: any) {
@@ -104,6 +93,7 @@ export default function register(api: any) {
   api.registerCommand({
     name: "tidepools",
     description: "Tide Pools all-provider quota report with session breakdown (supports same flags as /quota_all)",
+    nativeProgressMessages: { default: pickProgress() },
     acceptsArgs: true,
     requireAuth: true,
     handler: tideHandler,
@@ -113,6 +103,7 @@ export default function register(api: any) {
     name: "quota_all",
     description:
       "All provider quota windows (supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N, --anthropic-source auto|api|subscription)",
+    nativeProgressMessages: { default: pickProgress() },
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx: any) => {

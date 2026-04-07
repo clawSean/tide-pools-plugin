@@ -21,29 +21,59 @@ export const id = "openai-codex-oauth";
 export const provider = "openai-codex";
 
 /**
- * Quick check: do we have a credential file?
+ * Try to read an OAuth access token from OpenClaw's auth-profiles.json.
+ * Picks the profile with the latest expiry that hasn't expired yet.
  */
-export function isAvailable() {
+function readTokenFromAuthProfiles() {
   try {
-    return fs.existsSync(AUTH_PATH);
-  } catch {
-    return false;
-  }
+    const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
+    const agentsDir = path.join(openclawHome, "agents");
+    if (!fs.existsSync(agentsDir)) return null;
+
+    let best = null;
+    const now = Date.now();
+
+    for (const agent of fs.readdirSync(agentsDir)) {
+      const profilePath = path.join(agentsDir, agent, "agent", "auth-profiles.json");
+      try {
+        const raw = fs.readFileSync(profilePath, "utf8");
+        const data = JSON.parse(raw);
+        for (const entry of Object.values(data?.profiles || {})) {
+          if (entry?.provider !== "openai-codex" || entry?.type !== "oauth") continue;
+          if (!entry?.access || typeof entry.access !== "string") continue;
+          const expires = typeof entry.expires === "number" ? entry.expires : 0;
+          if (expires > 0 && expires < now) continue;
+          if (!best || expires > (best.expires || 0)) {
+            best = entry;
+          }
+        }
+      } catch { continue; }
+    }
+
+    return best?.access || null;
+  } catch {}
+  return null;
 }
 
 /**
- * Read the OAuth token from ~/.codex/auth.json.
- * The file structure varies — we look for common patterns:
- *   { "access_token": "..." }
- *   { "token": "..." }
- *   { "accessToken": "..." }
+ * Quick check: do we have credentials from either source?
+ */
+export function isAvailable() {
+  try {
+    if (fs.existsSync(AUTH_PATH)) return true;
+  } catch {}
+  return Boolean(readTokenFromAuthProfiles());
+}
+
+/**
+ * Read the OAuth token from ~/.codex/auth.json, falling back to
+ * OpenClaw's auth-profiles.json if the file doesn't exist.
  */
 function readToken() {
   try {
     const raw = fs.readFileSync(AUTH_PATH, "utf8");
     const data = JSON.parse(raw);
 
-    // Try common key names
     const token =
       data.access_token ||
       data.accessToken ||
@@ -51,11 +81,10 @@ function readToken() {
       data.auth_token ||
       null;
 
-    if (!token || typeof token !== "string") return null;
-    return token;
-  } catch {
-    return null;
-  }
+    if (token && typeof token === "string") return token;
+  } catch {}
+
+  return readTokenFromAuthProfiles();
 }
 
 /**
@@ -108,15 +137,69 @@ function fetchJson(url, token) {
 }
 
 /**
+ * Convert a window duration in seconds to a short label.
+ */
+function durationLabel(seconds) {
+  if (!seconds || typeof seconds !== "number") return "window";
+  const hours = seconds / 3600;
+  if (hours < 24) return `${Math.round(hours)}h`;
+  const days = Math.round(hours / 24);
+  if (days === 7) return "week";
+  return `${days}d`;
+}
+
+/**
+ * Extract windows from a rate_limit / code_review_rate_limit block
+ * (new WHAM format, 2025+).
+ */
+function parseRateLimitBlock(rl, labelPrefix) {
+  const out = [];
+  if (!rl) return out;
+
+  for (const key of ["primary_window", "secondary_window"]) {
+    const w = rl[key];
+    if (!w) continue;
+
+    const usedPercent =
+      typeof w.used_percent === "number" ? Math.round(w.used_percent) : null;
+    const leftPercent =
+      typeof usedPercent === "number" ? Math.max(0, 100 - usedPercent) : null;
+    const dur = durationLabel(w.limit_window_seconds);
+    const label = labelPrefix ? `${labelPrefix} ${dur}` : dur;
+
+    out.push({
+      label,
+      used: null,
+      limit: null,
+      remaining: null,
+      usedPercent,
+      leftPercent,
+      resetAt:
+        typeof w.reset_at === "number" ? w.reset_at * 1000 : null,
+    });
+  }
+
+  return out;
+}
+
+/**
  * Parse the usage response from OpenAI's WHAM endpoint.
- * Response shape varies but commonly includes:
- *   { "usage": { "used": N, "limit": N, "reset_at": "ISO", ... } }
- * or nested under plans/windows. We normalize what we find.
+ * Handles both legacy format (usage/windows/codex_usage) and
+ * current format (rate_limit with primary/secondary windows).
  */
 function parseUsageResponse(data) {
   const windows = [];
 
-  // Direct usage object (common for Pro/Plus)
+  // --- Current WHAM format: rate_limit with primary/secondary windows ---
+  if (data?.rate_limit) {
+    windows.push(...parseRateLimitBlock(data.rate_limit, ""));
+  }
+
+  if (data?.code_review_rate_limit) {
+    windows.push(...parseRateLimitBlock(data.code_review_rate_limit, "review"));
+  }
+
+  // --- Legacy format: direct usage object ---
   if (data?.usage) {
     const u = data.usage;
     const used = u.used ?? u.messages_used ?? null;
@@ -144,7 +227,7 @@ function parseUsageResponse(data) {
     });
   }
 
-  // Array of windows/tiers (Teams/Enterprise)
+  // --- Legacy format: array of windows/tiers ---
   if (Array.isArray(data?.windows)) {
     for (const w of data.windows) {
       const used = w.used ?? null;
@@ -173,7 +256,7 @@ function parseUsageResponse(data) {
     }
   }
 
-  // Codex-specific: check for codex_usage or similar
+  // --- Legacy format: codex_usage block ---
   if (data?.codex_usage) {
     const cu = data.codex_usage;
     const used = cu.used ?? null;
@@ -210,7 +293,7 @@ export async function probe() {
       return {
         available: false,
         providers: [],
-        error: "~/.codex/auth.json not found",
+        error: "No Codex OAuth credentials found (~/.codex/auth.json or auth-profiles.json)",
         source: id,
       };
     }
@@ -220,7 +303,7 @@ export async function probe() {
       return {
         available: false,
         providers: [],
-        error: "Could not read OAuth token from ~/.codex/auth.json",
+        error: "OAuth token unreadable or expired in both ~/.codex/auth.json and auth-profiles.json",
         source: id,
       };
     }
@@ -235,7 +318,7 @@ export async function probe() {
           {
             provider: "openai-codex",
             displayName: "OpenAI Codex",
-            plan: data?.plan || data?.subscription || null,
+            plan: data?.plan_type || data?.plan || data?.subscription || null,
             windows: [],
             error: "Usage endpoint returned no recognizable windows",
             meta: { rawKeys: Object.keys(data || {}) },
@@ -252,7 +335,7 @@ export async function probe() {
         {
           provider: "openai-codex",
           displayName: "OpenAI Codex",
-          plan: data?.plan || data?.subscription || null,
+          plan: data?.plan_type || data?.plan || data?.subscription || null,
           windows,
           error: null,
           meta: { rawKeys: Object.keys(data || {}) },
