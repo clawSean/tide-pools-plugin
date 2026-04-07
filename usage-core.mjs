@@ -146,19 +146,13 @@ export async function collectUsageSnapshot(opts = {}) {
     }
   }
 
-  // Layer 1: Adapter resolution
-  const resolved = await resolveAll({
-    includeVenice,
-    anthropicSource,
-  });
-
-  // Layer 2: Enrichment (fault-isolated)
-  let enrichment = null;
-  if (includeEnrichment) {
-    enrichment = await safeCollectEnrichment({
-      lookbackHours: opts.enrichmentLookbackHours,
-    });
-  }
+  // Layer 1 + Layer 2 in parallel (enrichment is independent of adapters)
+  const [resolved, enrichment] = await Promise.all([
+    resolveAll({ includeVenice, anthropicSource }),
+    includeEnrichment
+      ? safeCollectEnrichment({ lookbackHours: opts.enrichmentLookbackHours })
+      : null,
+  ]);
 
   const snapshot = {
     generatedAt: new Date().toISOString(),
@@ -188,6 +182,10 @@ function formatAnthropicLine(p, sourceTag) {
   const name = p.displayName || "Anthropic";
   const plan = p.plan ? ` [${p.plan}]` : "";
   const windows = Array.isArray(p.windows) ? p.windows : [];
+
+  if (p.error && !windows.length) {
+    return `• **${name}${plan}**: unavailable — ${p.error}${sourceTag}`;
+  }
 
   const byLabel = Object.fromEntries(windows.map((w) => [String(w.label || "").toLowerCase(), w]));
   const five = byLabel["5h"];
@@ -243,6 +241,11 @@ function formatProviderLine(p) {
     return formatAnthropicLine(p, sourceTag);
   }
 
+  // OpenRouter is special: account credits + key-level usage windows
+  if (String(p.provider || "").toLowerCase() === "openrouter") {
+    return formatOpenRouterLine(p, sourceTag);
+  }
+
   if (p.error) return `• **${name}${plan}**: unavailable — ${p.error}${sourceTag}`;
 
   const windows = Array.isArray(p.windows) ? p.windows : [];
@@ -285,12 +288,68 @@ function formatVeniceLine(p, sourceTag) {
   return `• **Venice [Diem]**: ${chunks.join(" | ")}${sourceTag}`;
 }
 
+function formatOpenRouterLine(p, sourceTag) {
+  const name = p.displayName || "OpenRouter";
+  const plan = p.plan ? ` [${p.plan}]` : "";
+  const data = p.openrouter || {};
+  const credits = data.credits || null;
+  const key = data.key || null;
+
+  if (p.error && !credits && !key) {
+    return `• **${name}${plan}**: unavailable — ${p.error}${sourceTag}`;
+  }
+
+  const chunks = [];
+
+  if (credits) {
+    const total = credits.totalCredits;
+    const used = credits.totalUsage;
+    const balance = credits.balance;
+    const usedPercent = credits.usedPercent;
+
+    if (total != null && used != null) {
+      chunks.push(
+        `credits: $${Number(used).toFixed(2)} / $${Number(total).toFixed(2)}${
+          usedPercent != null ? ` (${usedPercent}% used)` : ""
+        }`
+      );
+    }
+
+    if (balance != null) {
+      chunks.push(`balance: $${Number(balance).toFixed(2)}`);
+    }
+  }
+
+  if (key) {
+    if (key.limit != null && key.usage != null && key.limit > 0) {
+      const usedPercent = Math.max(0, Math.min(100, Math.round((key.usage / key.limit) * 100)));
+      const leftPercent = Math.max(0, 100 - usedPercent);
+      chunks.push(
+        `key limit: $${Number(key.usage).toFixed(2)} / $${Number(key.limit).toFixed(2)} (${leftPercent}% left)`
+      );
+    }
+
+    if (key.usageMonthly != null) chunks.push(`month: $${Number(key.usageMonthly).toFixed(2)}`);
+    if (key.usageWeekly != null) chunks.push(`week: $${Number(key.usageWeekly).toFixed(2)}`);
+    if (key.usageDaily != null) chunks.push(`day: $${Number(key.usageDaily).toFixed(2)}`);
+  }
+
+  const head = chunks.length
+    ? `• **${name}${plan}**: ${chunks.join(" | ")}${sourceTag}`
+    : `• **${name}${plan}**: no quota windows${sourceTag}`;
+
+  const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+  if (!warnings.length) return head;
+  return `${head}\n  └─ ⚠️ ${warnings.join(" · ")}`;
+}
+
 function formatSourceName(source) {
   const map = {
     "openai-codex-oauth": "OAuth API",
     "anthropic-cli-usage": "Claude /usage",
     "openclaw-status": "OpenClaw status",
     "venice-diem": "Diem API",
+    "openrouter-api": "OpenRouter API",
   };
   return map[source] || source;
 }

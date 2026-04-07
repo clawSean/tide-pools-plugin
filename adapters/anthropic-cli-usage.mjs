@@ -10,7 +10,7 @@
  *  - api: disabled at registry layer (falls back to openclaw-status).
  */
 
-import { execSync } from "node:child_process";
+import { execSync, exec } from "node:child_process";
 
 export const id = "anthropic-cli-usage";
 export const provider = "anthropic";
@@ -18,12 +18,16 @@ export const provider = "anthropic";
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 function sh(cmd, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  return execSync(cmd, {
-    encoding: "utf8",
-    timeout: timeoutMs,
-    stdio: ["ignore", "pipe", "pipe"],
-    shell: "/bin/bash",
-  }).trim();
+  return new Promise((resolve, reject) => {
+    exec(cmd, {
+      encoding: "utf8",
+      timeout: timeoutMs,
+      shell: "/bin/bash",
+    }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve((stdout || "").trim());
+    });
+  });
 }
 
 function q(s) {
@@ -32,7 +36,10 @@ function q(s) {
 
 export function isAvailable() {
   try {
-    sh("command -v tmux >/dev/null && command -v claude >/dev/null", 5000);
+    execSync("command -v tmux >/dev/null && command -v claude >/dev/null", {
+      encoding: "utf8", timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"], shell: "/bin/bash",
+    });
     return true;
   } catch {
     return false;
@@ -278,14 +285,106 @@ function looksLikeUsageOutput(raw) {
   return /(Current\s+session|Current\s+5[ -]?hour|Current\s+week|Extra\s+usage|Current\s+month|API\s+budget|\b\d+%\s*used\b)/i.test(t);
 }
 
-function fetchUsageRaw(sessionName, timeoutMs, claudeCommand) {
-  const setup = [
-    `tmux has-session -t ${q(sessionName)} 2>/dev/null || tmux new-session -d -s ${q(sessionName)} -x 120 -y 40 ${q(claudeCommand)}`,
-    "sleep 1",
-    `tmux send-keys -t ${q(sessionName)} C-c`,
-    `tmux send-keys -t ${q(sessionName)} C-l`,
-  ].join("; ");
+// ─── Session lifecycle helpers ───────────────────────────────────────────────
 
+async function capturePaneText(sessionName) {
+  try {
+    return await sh(`tmux capture-pane -t ${q(sessionName)} -p 2>/dev/null`, 5000);
+  } catch {
+    return "";
+  }
+}
+
+async function sessionExists(sessionName) {
+  try {
+    await sh(`tmux has-session -t ${q(sessionName)} 2>/dev/null`, 5000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function killSession(sessionName) {
+  try { await sh(`tmux kill-session -t ${q(sessionName)} 2>/dev/null`, 5000); } catch {}
+}
+
+function paneHasTrustPrompt(pane) {
+  return /trust this folder/i.test(pane) || /Yes, I trust/i.test(pane);
+}
+
+function paneHasReplPrompt(pane) {
+  const clean = stripAnsi(pane);
+  return clean.split("\n").some((line) => /^\s*❯\s*$/.test(line));
+}
+
+/**
+ * Ensure the tmux session exists and Claude is at its REPL prompt.
+ * Handles: session creation, trust-dialog acceptance, boot wait.
+ * Returns { ready, isNew, error? }.
+ */
+async function ensureSessionReady(sessionName, claudeCommand, maxWaitMs = 18000) {
+  let isNew = false;
+
+  if (!(await sessionExists(sessionName))) {
+    isNew = true;
+    try {
+      await sh(`tmux new-session -d -s ${q(sessionName)} -x 120 -y 40 ${q(claudeCommand)}`, 10000);
+    } catch (err) {
+      return { ready: false, isNew, error: `tmux new-session failed: ${err?.message || err}` };
+    }
+  }
+
+  // Dismiss any stale dialog (e.g. previous /usage output still on screen)
+  try { await sh(`tmux send-keys -t ${q(sessionName)} Escape 2>/dev/null`, 3000); } catch {}
+
+  const start = Date.now();
+  const pollMs = 1500;
+  let lastPane = "";
+
+  while (Date.now() - start < maxWaitMs) {
+    lastPane = await capturePaneText(sessionName);
+
+    if (paneHasTrustPrompt(lastPane)) {
+      try { await sh(`tmux send-keys -t ${q(sessionName)} Enter`, 3000); } catch {}
+      try { await sh("sleep 3", 5000); } catch {}
+      continue;
+    }
+
+    if (paneHasReplPrompt(lastPane)) {
+      return { ready: true, isNew };
+    }
+
+    try { await sh(`sleep ${pollMs / 1000}`, pollMs + 2000); } catch {}
+  }
+
+  return {
+    ready: false,
+    isNew,
+    error: `Claude REPL not ready after ${Math.round(maxWaitMs / 1000)}s (last pane: ${stripAnsi(lastPane).slice(-120)})`,
+  };
+}
+
+/**
+ * Reset the REPL input line: dismiss any open dialog, cancel pending input,
+ * clear the line buffer, then clear the screen.
+ */
+async function resetReplInput(sessionName) {
+  const cmds = [
+    `tmux send-keys -t ${q(sessionName)} Escape`,
+    "sleep 0.3",
+    `tmux send-keys -t ${q(sessionName)} C-c`,
+    "sleep 0.3",
+    `tmux send-keys -t ${q(sessionName)} C-u`,
+    `tmux send-keys -t ${q(sessionName)} C-l`,
+    "sleep 0.5",
+  ].join("; ");
+  try { await sh(cmds, 8000); } catch {}
+}
+
+/**
+ * Send /usage to a ready session and capture the output.
+ */
+async function sendUsageAndCapture(sessionName, timeoutMs) {
   const attempts = [
     [
       `tmux send-keys -t ${q(sessionName)} '/usage'`,
@@ -307,15 +406,47 @@ function fetchUsageRaw(sessionName, timeoutMs, claudeCommand) {
 
   let last = "";
   for (const step of attempts) {
+    await resetReplInput(sessionName);
     try {
-      const raw = sh(`${setup}; ${step}`, timeoutMs);
+      const raw = await sh(step, timeoutMs);
       last = raw;
-      if (looksLikeUsageOutput(raw)) return raw;
+      if (looksLikeUsageOutput(raw)) return { ok: true, raw };
     } catch (err) {
       last = err?.message || String(err);
     }
   }
-  return last;
+  return { ok: false, raw: last };
+}
+
+/**
+ * Full lifecycle: ensure session is ready → send /usage → capture output.
+ * On failure, kills the session and retries once from scratch.
+ */
+async function fetchUsageRaw(sessionName, timeoutMs, claudeCommand) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const ready = await ensureSessionReady(sessionName, claudeCommand);
+    if (!ready.ready) {
+      if (attempt === 0) {
+        await killSession(sessionName);
+        continue;
+      }
+      return { raw: "", error: ready.error || "Claude REPL never became ready" };
+    }
+
+    const result = await sendUsageAndCapture(sessionName, timeoutMs);
+    if (result.ok) return { raw: result.raw, error: null };
+
+    if (attempt === 0) {
+      await killSession(sessionName);
+    } else {
+      return {
+        raw: result.raw,
+        error: "Could not capture /usage output after retry",
+      };
+    }
+  }
+
+  return { raw: "", error: "fetchUsageRaw exhausted retries" };
 }
 
 function providerFromParsed(parsed) {
@@ -407,8 +538,18 @@ export async function probe(opts = {}) {
     const timeoutMs = Number(process.env.TIDE_POOLS_ANTHROPIC_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
     const claudeCommand = process.env.TIDE_POOLS_ANTHROPIC_CLAUDE_CMD || "claude";
 
-    const raw = fetchUsageRaw(tmuxSession, timeoutMs, claudeCommand);
-    const parsed = parseUsage(raw, new Date());
+    const result = await fetchUsageRaw(tmuxSession, timeoutMs, claudeCommand);
+
+    if (result.error) {
+      return {
+        available: false,
+        providers: [],
+        error: `Claude CLI session error: ${result.error}`,
+        source: id,
+      };
+    }
+
+    const parsed = parseUsage(result.raw, new Date());
 
     if (sourceMode === "subscription" && parsed.mode !== "subscription") {
       return {
@@ -419,7 +560,6 @@ export async function probe(opts = {}) {
       };
     }
 
-    // auto mode: only own Anthropic when subscription windows are available.
     if (sourceMode === "auto" && parsed.mode !== "subscription") {
       return {
         available: false,
@@ -434,7 +574,7 @@ export async function probe(opts = {}) {
       return {
         available: false,
         providers: [],
-        error: "No recognizable anthropic usage windows from /usage",
+        error: "No recognizable usage windows from /usage output (Claude CLI may have changed its format)",
         source: id,
       };
     }
