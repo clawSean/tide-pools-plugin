@@ -347,7 +347,7 @@ export function formatEnrichment(enrichment, opts = {}) {
     const catColWidth = Math.max(...catEntries.map(([c]) => c.length), 6);
     for (const [cat, data] of catEntries) {
       const tokens = fmtTokens(data.tokens);
-      const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
+      const cost = data.cost > 0 ? ` - $${data.cost.toFixed(2)}` : "";
       const count = `(${data.sessions})`;
       lines.push(`  ${cat.padEnd(catColWidth)}  ${tokens} tok${cost}  ${count}`);
     }
@@ -361,7 +361,7 @@ export function formatEnrichment(enrichment, opts = {}) {
       lines.push(`\nBy Model:`);
       for (const [m, data] of modelEntries) {
         const tokens = fmtTokens(data.tokens);
-        const cost = data.cost > 0 ? ` · $${data.cost.toFixed(2)}` : "";
+        const cost = data.cost > 0 ? ` - $${data.cost.toFixed(2)}` : "";
         lines.push(`  ${shortModel(m)}: ${tokens} tok${cost}`);
       }
     }
@@ -372,7 +372,7 @@ export function formatEnrichment(enrichment, opts = {}) {
       lines.push(`\nSessions:`);
       for (const s of sessions) {
         const tokens = fmtTokens(s.totalTokens);
-        const cost = s.costTotal > 0 ? ` · $${s.costTotal.toFixed(2)}` : "";
+        const cost = s.costTotal > 0 ? ` - $${s.costTotal.toFixed(2)}` : "";
         const modelTag = s.model ? ` [${shortModel(s.model)}]` : "";
         const label = s.label || s.sessionId.slice(0, 12);
         lines.push(`  ${label}${modelTag} — ${tokens} tok${cost}`);
@@ -385,7 +385,7 @@ export function formatEnrichment(enrichment, opts = {}) {
     // ── Totals ──
     const totalTok = fmtTokens(totals.totalTokens);
     const totalCost =
-      totals.costTotal > 0 ? ` · $${totals.costTotal.toFixed(2)}` : "";
+      totals.costTotal > 0 ? ` - $${totals.costTotal.toFixed(2)}` : "";
     lines.push(`\nTotal: ${totalTok} tokens${totalCost}`);
 
     return lines.join("\n");
