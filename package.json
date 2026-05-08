@@ -25,6 +25,7 @@
     "README.md"
   ],
   "scripts": {
+    "test": "node --test test/*.test.mjs",
     "test:cli": "node ./cli.mjs --format text --no-cache",
     "test:json": "node ./cli.mjs --format json --no-cache",
     "pack:local": "npm pack"

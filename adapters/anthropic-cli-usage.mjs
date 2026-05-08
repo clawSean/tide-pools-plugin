@@ -71,7 +71,7 @@ function formatUtcIso(dt) {
   return dt.toISOString();
 }
 
-function parseResetTime(resetText, now = new Date()) {
+export function parseResetTime(resetText, now = new Date()) {
   if (!resetText) return null;
 
   const raw = String(resetText).trim();
@@ -105,14 +105,15 @@ function parseResetTime(resetText, now = new Date()) {
     return dt;
   }
 
-  const timeOnlyRe = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i;
+  const timeOnlyRe = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/i;
   const t = cleaned.match(timeOnlyRe);
   if (t) {
     let hour = Number(t[1]);
     const minute = Number(t[2] || "0");
-    const ap = t[3].toLowerCase();
+    const ap = String(t[3] || "").toLowerCase();
     if (ap === "pm" && hour < 12) hour += 12;
     if (ap === "am" && hour === 12) hour = 0;
+    if (!ap && hour > 23) return null;
 
     const { y, m, d } = utcDateParts(now);
     let dt = new Date(Date.UTC(y, m, d, hour, minute, 0, 0));
@@ -172,18 +173,21 @@ function parseWindowSection(lines, headingRegex, now = new Date()) {
 function parseExtraSection(lines, now = new Date()) {
   const idx = findHeadingIndex(lines, /^extra usage$/i);
   if (idx < 0) {
-    return {
-      status: /out of extra usage/i.test(lines.join("\n")) ? "exhausted" : "unknown",
-      pctUsed: null,
-      pctRemaining: null,
-      spentUsd: null,
-      limitUsd: null,
-      availableUsd: null,
-      overUsd: null,
-      resetText: null,
-      resetAtIso: null,
-      resetIn: null,
-    };
+    if (/out of extra usage/i.test(lines.join("\n"))) {
+      return {
+        status: "exhausted",
+        pctUsed: null,
+        pctRemaining: null,
+        spentUsd: null,
+        limitUsd: null,
+        availableUsd: null,
+        overUsd: null,
+        resetText: null,
+        resetAtIso: null,
+        resetIn: null,
+      };
+    }
+    return null;
   }
 
   const chunk = sectionSlice(lines, idx, 16).join("\n");
@@ -193,7 +197,7 @@ function parseExtraSection(lines, now = new Date()) {
   if (/not enabled/i.test(chunk)) status = "not enabled";
   else if (/enabled/i.test(chunk)) status = "enabled";
 
-  const money = chunk.match(/\$\s*([0-9]+(?:\.[0-9]+)?)\s*\/\s*\$\s*([0-9]+(?:\.[0-9]+)?)\s*spent/i);
+  const money = chunk.match(/\$\s*([0-9]+(?:\.[0-9]+)?)\s*\/\s*\$\s*([0-9]+(?:\.[0-9]+)?)(?:\s*(?:spent|used))?/i);
   const spentUsd = toNumber(money?.[1] ?? null);
   const limitUsd = toNumber(money?.[2] ?? null);
   const availableUsd = spentUsd != null && limitUsd != null ? Math.max(0, limitUsd - spentUsd) : null;
@@ -248,13 +252,13 @@ function parseApiBudget(clean, now = new Date()) {
   };
 }
 
-function parseUsage(raw = "", now = new Date()) {
+export function parseUsage(raw = "", now = new Date()) {
   const clean = stripAnsi(raw);
   const lines = clean.split("\n").map((l) => l.trimEnd());
 
-  const fiveHour = parseWindowSection(lines, /^current session$/i, now)
-    || parseWindowSection(lines, /^current 5[ -]?hour(?: window)?$/i, now)
-    || parseWindowSection(lines, /^current 5h(?: window)?$/i, now);
+  const fiveHour = parseWindowSection(lines, /^current session(?:\s*\(.*\))?$/i, now)
+    || parseWindowSection(lines, /^current 5[ -]?hour(?: window)?(?:\s*\(.*\))?$/i, now)
+    || parseWindowSection(lines, /^current 5h(?: window)?(?:\s*\(.*\))?$/i, now);
 
   const week = parseWindowSection(lines, /^current week(?:\s*\(all models\))?$/i, now);
   const extra = parseExtraSection(lines, now);
@@ -314,7 +318,7 @@ function paneHasTrustPrompt(pane) {
 
 function paneHasReplPrompt(pane) {
   const clean = stripAnsi(pane);
-  return clean.split("\n").some((line) => /^\s*❯\s*$/.test(line));
+  return clean.split("\n").some((line) => /^\s*❯(?:\s|$)/.test(line));
 }
 
 /**
@@ -449,7 +453,7 @@ async function fetchUsageRaw(sessionName, timeoutMs, claudeCommand) {
   return { raw: "", error: "fetchUsageRaw exhausted retries" };
 }
 
-function providerFromParsed(parsed) {
+export function providerFromParsed(parsed) {
   const windows = [];
   if (parsed?.fiveHour?.pctUsed != null) {
     windows.push({
@@ -473,7 +477,7 @@ function providerFromParsed(parsed) {
   }
 
   const extra = parsed?.extra || null;
-  if (extra && (extra.pctUsed != null || (extra.spentUsd != null && extra.limitUsd != null))) {
+  if (extra && (extra.status === "exhausted" || extra.pctUsed != null || (extra.spentUsd != null && extra.limitUsd != null))) {
     const pctFromMoney = extra.spentUsd != null && extra.limitUsd != null && extra.limitUsd > 0
       ? (extra.spentUsd / extra.limitUsd) * 100
       : null;

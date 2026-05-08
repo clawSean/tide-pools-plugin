@@ -7,6 +7,7 @@
  *  - If a direct adapter fails, fall back to openclaw-status data for that provider
  *  - Every adapter runs with its own timeout + try/catch — one failure never blocks others
  *  - Venice is special (uses Diem, not standard windows) — handled in formatting
+ *  - Multiple auth profiles of the same provider kind each get their own row (keyed by instanceId)
  */
 
 import * as openclawStatus from "./openclaw-status.mjs";
@@ -18,7 +19,7 @@ import * as veniceDiem from "./venice-diem.mjs";
 /** All registered adapters, ordered by priority (direct > generic) */
 const ADAPTERS = [
   { module: openaiCodexOauth, priority: 10, direct: true },
-  { module: anthropicCliUsage, priority: 10, direct: true },
+  { module: anthropicCliUsage, priority: 10, direct: true, timeoutMs: 70_000 },
   { module: openrouterApi, priority: 10, direct: true },
   { module: veniceDiem, priority: 10, direct: true },
   { module: openclawStatus, priority: 0, direct: false },
@@ -67,19 +68,48 @@ async function runAdapter(adapter, timeoutMs = 35_000, context = {}) {
 }
 
 /**
- * Merge fallback adapter results into the provider map for any providers
- * not already covered by direct adapters.
+ * Build provider map and direct-provider-kind set from a list of adapter results.
+ * Each provider is keyed by p.instanceId (falling back to p.provider) so that
+ * multiple auth profiles of the same provider kind each get their own row.
+ *
+ * Exported for testing.
+ *
+ * @param {object[]} directResults - array of runAdapter return values
+ * @returns {{ providerMap: Map, directProviders: Set }}
+ */
+export function buildProviderMap(directResults) {
+  const providerMap = new Map();
+  const directProviders = new Set();
+
+  for (const ar of directResults) {
+    if (ar.skipped || !ar.result?.available) continue;
+    for (const p of ar.result.providers || []) {
+      directProviders.add(p.provider);
+      const instKey = p.instanceId || p.provider;
+      providerMap.set(instKey, { ...p, instanceId: instKey, source: ar.id, sourceType: "direct" });
+    }
+  }
+
+  return { providerMap, directProviders };
+}
+
+/**
+ * Merge fallback adapter results into the provider map for any provider *kinds*
+ * not already covered by direct adapters. Same-kind direct adapter rows are never
+ * replaced — the gap check is by provider kind (p.provider), not by instance.
  */
 function mergeFallback(fallbackResult, providerMap, directProviders, includeVenice) {
   if (!fallbackResult || fallbackResult.skipped || !fallbackResult.result?.available) return;
 
   for (const p of fallbackResult.result.providers || []) {
-    const key = p.provider;
-    if (directProviders.has(key)) continue;
-    if (key.includes("venice") && !includeVenice) continue;
+    const kind = p.provider;
+    if (directProviders.has(kind)) continue;
+    if (kind.includes("venice") && !includeVenice) continue;
 
-    providerMap.set(key, {
+    const instKey = p.instanceId || kind;
+    providerMap.set(instKey, {
       ...p,
+      instanceId: instKey,
       source: fallbackResult.id,
       sourceType: "fallback",
     });
@@ -100,7 +130,7 @@ function mergeFallback(fallbackResult, providerMap, directProviders, includeVeni
  */
 export async function resolveAll(opts = {}) {
   const includeVenice = opts.includeVenice !== false;
-  const timeoutMs = opts.adapterTimeoutMs || 25_000;
+  const timeoutMs = opts.adapterTimeoutMs || Number(process.env.TIDE_POOLS_ADAPTER_TIMEOUT_MS || 0) || 25_000;
   const anthropicSource = String(opts.anthropicSource || "auto").toLowerCase();
 
   const directAdapters = ADAPTERS.filter((a) => {
@@ -121,22 +151,13 @@ export async function resolveAll(opts = {}) {
 
   // Run all direct adapters in parallel and wait for them
   const directResults = await Promise.all(
-    directAdapters.map((a) => runAdapter(a, timeoutMs, { anthropicSource }))
+    directAdapters.map((a) => runAdapter(a, a.timeoutMs || timeoutMs, { anthropicSource }))
   );
 
-  // Collect direct provider data
-  const providerMap = new Map();
-  const directProviders = new Set();
+  // Collect direct provider data, keyed by instanceId to preserve same-kind profiles
+  const { providerMap, directProviders } = buildProviderMap(directResults);
 
-  for (const ar of directResults) {
-    if (ar.skipped || !ar.result?.available) continue;
-    for (const p of ar.result.providers || []) {
-      directProviders.add(p.provider);
-      providerMap.set(p.provider, { ...p, source: ar.id, sourceType: "direct" });
-    }
-  }
-
-  // Check if any direct adapter failed to produce its provider
+  // Check if any direct adapter failed to produce its provider kind
   const expectedProviders = directAdapters
     .filter((a) => !directResults.find((r) => r.id === a.module.id)?.skipped)
     .map((a) => a.module.provider);

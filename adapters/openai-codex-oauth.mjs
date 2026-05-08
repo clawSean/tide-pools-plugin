@@ -1,38 +1,117 @@
 /**
  * Adapter: openai-codex-oauth
- * Reads OAuth credentials from ~/.codex/auth.json and hits OpenAI's
- * usage endpoint directly for dashboard-accurate quota data.
+ * Reads OAuth credentials from ~/.codex/auth.json and OpenClaw auth-profiles,
+ * then hits OpenAI's usage endpoint for dashboard-accurate quota data.
+ *
+ * Supports multiple OAuth profiles — each valid non-expired token is probed
+ * separately and returned as a distinct provider row with its own instanceId.
  *
  * This is the same approach CodexBar uses — first-party session state.
- * If ~/.codex/auth.json doesn't exist or the token is expired, isAvailable()
- * returns false and the adapter is skipped gracefully.
+ * If no credentials exist or all tokens are expired, isAvailable() returns false.
  */
 
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import https from "node:https";
+import http from "node:http";
 
 const AUTH_PATH = path.join(os.homedir(), ".codex", "auth.json");
-const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const TIMEOUT_MS = 15_000;
 
 export const id = "openai-codex-oauth";
 export const provider = "openai-codex";
 
+function getUsageUrl() {
+  return process.env.CODEX_WHAM_URL || "https://chatgpt.com/backend-api/wham/usage";
+}
+
 /**
- * Try to read an OAuth access token from OpenClaw's auth-profiles.json.
- * Picks the profile with the latest expiry that hasn't expired yet.
+ * Read all valid OAuth tokens from ~/.codex/auth.json and all auth-profiles.
+ * Returns token descriptors — token values are included internally for probing
+ * but never surfaced in public output.
+ *
+ * @returns {{ token: string, instanceId: string, source: string, agent?: string, profileKey?: string, label?: string, expires?: number }[]}
  */
-function readTokenFromAuthProfiles() {
+function readAllTokens() {
+  const tokens = [];
+  const seenTokens = new Set();
+  const now = Date.now();
+
+  // Local ~/.codex/auth.json (always "local" profile, no expiry check)
+  try {
+    const raw = fs.readFileSync(AUTH_PATH, "utf8");
+    const data = JSON.parse(raw);
+    const token =
+      data.access_token ||
+      data.accessToken ||
+      data.token ||
+      data.auth_token ||
+      null;
+    if (token && typeof token === "string") {
+      seenTokens.add(token);
+      tokens.push({ token, instanceId: "openai-codex:local", source: "codex-auth", label: "local" });
+    }
+  } catch {}
+
+  // Auth-profile OAuth entries (one per non-expired profile, deduplicated by token value)
   try {
     const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
     const agentsDir = path.join(openclawHome, "agents");
-    if (!fs.existsSync(agentsDir)) return null;
+    if (!fs.existsSync(agentsDir)) return tokens;
 
-    let best = null;
+    for (const agent of fs.readdirSync(agentsDir)) {
+      const profilePath = path.join(agentsDir, agent, "agent", "auth-profiles.json");
+      try {
+        const raw = fs.readFileSync(profilePath, "utf8");
+        const data = JSON.parse(raw);
+        for (const [profileKey, entry] of Object.entries(data?.profiles || {})) {
+          if (entry?.provider !== "openai-codex" || entry?.type !== "oauth") continue;
+          if (!entry?.access || typeof entry.access !== "string") continue;
+          const expires = typeof entry.expires === "number" ? entry.expires : 0;
+          if (expires > 0 && expires < now) continue;
+          if (seenTokens.has(entry.access)) continue;
+          seenTokens.add(entry.access);
+          tokens.push({
+            token: entry.access,
+            instanceId: `openai-codex:profile:${agent}:${profileKey}`,
+            source: "profile",
+            agent,
+            profileKey,
+            label: entry.label || entry.name || null,
+            expires,
+          });
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {}
+
+  return tokens;
+}
+
+/**
+ * Discover all OpenAI Codex auth profiles (metadata only — no token values).
+ * Exported for testing and dry-run inspection.
+ */
+export function discoverProfiles() {
+  return readAllTokens().map(({ token: _t, ...meta }) => meta);
+}
+
+/**
+ * Quick availability check: do we have any usable credential source?
+ */
+export function isAvailable() {
+  try {
+    if (fs.existsSync(AUTH_PATH)) return true;
+  } catch {}
+  // Quick check: any non-expired auth-profile OAuth entry?
+  try {
+    const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
+    const agentsDir = path.join(openclawHome, "agents");
+    if (!fs.existsSync(agentsDir)) return false;
     const now = Date.now();
-
     for (const agent of fs.readdirSync(agentsDir)) {
       const profilePath = path.join(agentsDir, agent, "agent", "auth-profiles.json");
       try {
@@ -40,63 +119,43 @@ function readTokenFromAuthProfiles() {
         const data = JSON.parse(raw);
         for (const entry of Object.values(data?.profiles || {})) {
           if (entry?.provider !== "openai-codex" || entry?.type !== "oauth") continue;
-          if (!entry?.access || typeof entry.access !== "string") continue;
+          if (!entry?.access) continue;
           const expires = typeof entry.expires === "number" ? entry.expires : 0;
           if (expires > 0 && expires < now) continue;
-          if (!best || expires > (best.expires || 0)) {
-            best = entry;
-          }
+          return true;
         }
       } catch { continue; }
     }
-
-    return best?.access || null;
   } catch {}
-  return null;
+  return false;
 }
 
 /**
- * Quick check: do we have credentials from either source?
- */
-export function isAvailable() {
-  try {
-    if (fs.existsSync(AUTH_PATH)) return true;
-  } catch {}
-  return Boolean(readTokenFromAuthProfiles());
-}
-
-/**
- * Read the OAuth token from ~/.codex/auth.json, falling back to
- * OpenClaw's auth-profiles.json if the file doesn't exist.
- */
-function readToken() {
-  try {
-    const raw = fs.readFileSync(AUTH_PATH, "utf8");
-    const data = JSON.parse(raw);
-
-    const token =
-      data.access_token ||
-      data.accessToken ||
-      data.token ||
-      data.auth_token ||
-      null;
-
-    if (token && typeof token === "string") return token;
-  } catch {}
-
-  return readTokenFromAuthProfiles();
-}
-
-/**
- * Fetch JSON from a URL with bearer auth.
+ * Fetch JSON from a URL with bearer auth. Supports both http:// and https://.
  */
 function fetchJson(url, token) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let req;
+    const finishResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
+    const finishReject = (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(err);
+    };
     const timeout = setTimeout(() => {
-      reject(new Error("Request timed out"));
+      try { req?.destroy(); } catch {}
+      finishReject(new Error("Request timed out"));
     }, TIMEOUT_MS);
 
-    const req = https.get(
+    const requester = url.startsWith("https://") ? https : http;
+    req = requester.get(
       url,
       {
         headers: {
@@ -109,29 +168,26 @@ function fetchJson(url, token) {
         let body = "";
         res.on("data", (chunk) => (body += chunk));
         res.on("end", () => {
-          clearTimeout(timeout);
           if (res.statusCode !== 200) {
-            reject(
+            finishReject(
               new Error(`HTTP ${res.statusCode}: ${body.slice(0, 200)}`)
             );
             return;
           }
           try {
-            resolve(JSON.parse(body));
+            finishResolve(JSON.parse(body));
           } catch (e) {
-            reject(new Error(`JSON parse failed: ${e.message}`));
+            finishReject(new Error(`JSON parse failed: ${e.message}`));
           }
         });
         res.on("error", (e) => {
-          clearTimeout(timeout);
-          reject(e);
+          finishReject(e);
         });
       }
     );
 
     req.on("error", (e) => {
-      clearTimeout(timeout);
-      reject(e);
+      finishReject(e);
     });
   });
 }
@@ -287,9 +343,39 @@ function parseUsageResponse(data) {
   return windows;
 }
 
+/**
+ * Probe a single OAuth token and return a provider entry, or null if it fails.
+ */
+async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource, agent, profileKey, label }) {
+  const data = await fetchJson(usageUrl, token);
+  const windows = parseUsageResponse(data);
+
+  let displayName = "OpenAI Codex";
+  if (tokenSource === "profile") {
+    const nameHint = label || agent || profileKey;
+    if (nameHint) displayName = `OpenAI Codex [${nameHint}]`;
+  }
+
+  return {
+    provider: "openai-codex",
+    instanceId,
+    displayName,
+    plan: data?.plan_type || data?.plan || data?.subscription || null,
+    windows,
+    error: windows.length ? null : "Usage endpoint returned no recognizable windows",
+    meta: {
+      rawKeys: Object.keys(data || {}),
+      source: tokenSource,
+      agent: agent || null,
+    },
+  };
+}
+
 export async function probe() {
   try {
-    if (!isAvailable()) {
+    const allTokens = readAllTokens();
+
+    if (!allTokens.length) {
       return {
         available: false,
         providers: [],
@@ -298,50 +384,37 @@ export async function probe() {
       };
     }
 
-    const token = readToken();
-    if (!token) {
+    const usageUrl = getUsageUrl();
+
+    const settled = await Promise.all(
+      allTokens.map((t) =>
+        probeOneToken(usageUrl, t).catch((err) => ({
+          provider: null,
+          instanceId: t.instanceId,
+          error: `${t.label || t.agent || t.profileKey || t.instanceId}: ${err?.message || String(err)}`,
+        }))
+      )
+    );
+
+    const providers = settled.filter((entry) => entry?.provider);
+    const tokenErrors = settled.filter((entry) => !entry?.provider && entry?.error).map((entry) => entry.error);
+
+    if (!providers.length) {
       return {
         available: false,
         providers: [],
-        error: "OAuth token unreadable or expired in both ~/.codex/auth.json and auth-profiles.json",
-        source: id,
-      };
-    }
-
-    const data = await fetchJson(USAGE_URL, token);
-    const windows = parseUsageResponse(data);
-
-    if (!windows.length) {
-      return {
-        available: true,
-        providers: [
-          {
-            provider: "openai-codex",
-            displayName: "OpenAI Codex",
-            plan: data?.plan_type || data?.plan || data?.subscription || null,
-            windows: [],
-            error: "Usage endpoint returned no recognizable windows",
-            meta: { rawKeys: Object.keys(data || {}) },
-          },
-        ],
-        error: null,
+        error: tokenErrors.length
+          ? `All OAuth probes failed: ${tokenErrors.join(" | ")}`
+          : "All OAuth probes failed (tokens may be expired)",
         source: id,
       };
     }
 
     return {
       available: true,
-      providers: [
-        {
-          provider: "openai-codex",
-          displayName: "OpenAI Codex",
-          plan: data?.plan_type || data?.plan || data?.subscription || null,
-          windows,
-          error: null,
-          meta: { rawKeys: Object.keys(data || {}) },
-        },
-      ],
-      error: null,
+      providers,
+      error: tokenErrors.length ? `${tokenErrors.length} OAuth profile(s) failed` : null,
+      warnings: tokenErrors,
       source: id,
     };
   } catch (err) {

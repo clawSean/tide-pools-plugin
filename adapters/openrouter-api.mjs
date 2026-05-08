@@ -5,12 +5,16 @@
  *  - GET /credits (account-wide credits; management key required)
  *  - GET /key     (current API key usage + limits)
  *
+ * Supports multiple auth profiles — each key/profile is probed separately
+ * and returned as a distinct provider row with its own instanceId.
+ *
  * Endpoint references:
  *  - https://openrouter.ai/docs/api/api-reference/credits/get-credits
  *  - https://openrouter.ai/docs/api/reference/limits
  */
 
 import https from "node:https";
+import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -32,53 +36,80 @@ function normalizeBaseUrl(raw) {
 }
 
 /**
- * Try to read the OpenRouter API key from OpenClaw's auth-profiles.json.
- * Scans all agent directories for an openrouter profile with type "api_key".
+ * Read all usable OpenRouter API keys from env vars and auth-profiles.
+ * Returns an array of profile descriptors — the actual key value is included
+ * internally for probing but never exposed in public output.
+ *
+ * @returns {{ key: string, instanceId: string, source: string, agent?: string, profileKey?: string, label?: string }[]}
  */
-function readKeyFromAuthProfiles() {
+function readAllApiKeys() {
+  const profiles = [];
+  const seenKeys = new Set();
+
+  // Env key (one profile, labeled "env")
+  const envKey =
+    process.env.OPENROUTER_API_KEY ||
+    process.env.OPENROUTER_KEY ||
+    process.env.OPEN_ROUTER_API_KEY ||
+    null;
+  if (envKey) {
+    const token = String(envKey).trim().replace(/^Bearer\s+/i, "");
+    if (token && !seenKeys.has(token)) {
+      seenKeys.add(token);
+      profiles.push({ key: token, instanceId: "openrouter:env", source: "env", label: null });
+    }
+  }
+
+  // Auth-profile keys (one per matching profile entry, deduplicated by key value)
   try {
     const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
     const agentsDir = path.join(openclawHome, "agents");
-    if (!fs.existsSync(agentsDir)) return null;
+    if (!fs.existsSync(agentsDir)) return profiles;
 
     for (const agent of fs.readdirSync(agentsDir)) {
       const profilePath = path.join(agentsDir, agent, "agent", "auth-profiles.json");
       try {
         const raw = fs.readFileSync(profilePath, "utf8");
         const data = JSON.parse(raw);
-        const profiles = data?.profiles || {};
-        for (const entry of Object.values(profiles)) {
-          if (entry?.provider === "openrouter" && entry?.type === "api_key" && entry?.key) {
-            return String(entry.key).trim();
-          }
+        const profilesObj = data?.profiles || {};
+        for (const [profileKey, entry] of Object.entries(profilesObj)) {
+          if (entry?.provider !== "openrouter" || entry?.type !== "api_key" || !entry?.key) continue;
+          const token = String(entry.key).trim().replace(/^Bearer\s+/i, "");
+          if (!token || seenKeys.has(token)) continue;
+          seenKeys.add(token);
+          profiles.push({
+            key: token,
+            instanceId: `openrouter:profile:${agent}:${profileKey}`,
+            source: "profile",
+            agent,
+            profileKey,
+            label: entry.label || entry.name || null,
+          });
         }
       } catch {
         continue;
       }
     }
   } catch {}
-  return null;
+
+  return profiles;
 }
 
-function readApiKey() {
-  const envKey =
-    process.env.OPENROUTER_API_KEY ||
-    process.env.OPENROUTER_KEY ||
-    process.env.OPEN_ROUTER_API_KEY ||
-    null;
-
-  if (envKey) {
-    const token = String(envKey).trim();
-    if (token) return token.replace(/^Bearer\s+/i, "");
-  }
-
-  return readKeyFromAuthProfiles();
+/**
+ * Discover all OpenRouter auth profiles (metadata only — no key values).
+ * Exported for testing and dry-run inspection.
+ */
+export function discoverProfiles() {
+  return readAllApiKeys().map(({ key: _key, ...meta }) => meta);
 }
 
 export function isAvailable() {
-  return Boolean(readApiKey());
+  return readAllApiKeys().length > 0;
 }
 
+/**
+ * Fetch JSON from a URL with bearer auth. Supports both http:// and https://.
+ */
 function fetchJson(url, token) {
   return new Promise((resolve) => {
     const headers = {
@@ -92,18 +123,26 @@ function fetchJson(url, token) {
     }
     headers["X-Title"] = String(process.env.OPENROUTER_X_TITLE || "Tide Pools");
 
+    let settled = false;
+    let req;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(value);
+    };
     const timeout = setTimeout(() => {
-      resolve({ ok: false, status: 0, data: null, error: "request timed out" });
+      try { req?.destroy(); } catch {}
+      finish({ ok: false, status: 0, data: null, error: "request timed out" });
     }, TIMEOUT_MS);
 
-    const req = https.get(url, { headers }, (res) => {
+    const requester = url.startsWith("https://") ? https : http;
+    req = requester.get(url, { headers }, (res) => {
       let body = "";
       res.on("data", (chunk) => {
         body += chunk;
       });
       res.on("end", () => {
-        clearTimeout(timeout);
-
         let parsed = null;
         try {
           parsed = body ? JSON.parse(body) : null;
@@ -112,7 +151,7 @@ function fetchJson(url, token) {
         }
 
         const ok = res.statusCode >= 200 && res.statusCode < 300;
-        resolve({
+        finish({
           ok,
           status: res.statusCode || 0,
           data: parsed,
@@ -125,8 +164,7 @@ function fetchJson(url, token) {
     });
 
     req.on("error", (err) => {
-      clearTimeout(timeout);
-      resolve({ ok: false, status: 0, data: null, error: err?.message || String(err) });
+      finish({ ok: false, status: 0, data: null, error: err?.message || String(err) });
     });
   });
 }
@@ -215,80 +253,112 @@ function buildWindows(credits, key) {
   return windows;
 }
 
+/**
+ * Probe a single key and return a provider entry, or null if the key fails.
+ */
+async function probeOneKey(base, { key, instanceId, source: keySource, agent, profileKey, label }) {
+  const [creditsRes, keyRes] = await Promise.all([
+    fetchJson(`${base}/credits`, key),
+    fetchJson(`${base}/key`, key),
+  ]);
+
+  const credits = creditsRes.ok ? parseCredits(creditsRes.data) : null;
+  const keyData = keyRes.ok ? parseKey(keyRes.data) : null;
+
+  const nameHint = label || agent || profileKey || instanceId;
+  if (!credits && !keyData) {
+    return {
+      provider: null,
+      instanceId,
+      error: `${nameHint}: credits ${creditsRes.status || "ERR"} ${creditsRes.error || "failed"}; key ${keyRes.status || "ERR"} ${keyRes.error || "failed"}`,
+    };
+  }
+
+  const windows = buildWindows(credits, keyData);
+
+  const plan =
+    keyData?.isFreeTier === true
+      ? "free-tier"
+      : keyData?.isManagementKey === true
+        ? "management-key"
+        : null;
+
+  const warnings = [];
+  if (!creditsRes.ok) {
+    warnings.push(
+      `credits unavailable (${creditsRes.status || "ERR"}: ${creditsRes.error || "failed"})`
+    );
+  }
+
+  let displayName = "OpenRouter";
+  if (keySource === "profile") {
+    if (nameHint) displayName = `OpenRouter [${nameHint}]`;
+  }
+
+  return {
+    provider: "openrouter",
+    instanceId,
+    displayName,
+    plan,
+    windows,
+    error: null,
+    openrouter: {
+      credits,
+      key: keyData,
+      warnings,
+    },
+    meta: {
+      source: keySource,
+      agent: agent || null,
+      profileKey: profileKey || null,
+      label: label || null,
+    },
+  };
+}
+
 export async function probe() {
   try {
-    const token = readApiKey();
-    if (!token) {
+    const allKeys = readAllApiKeys();
+    if (!allKeys.length) {
       return {
         available: false,
         providers: [],
-        error: "OPENROUTER_API_KEY not set",
+        error: "No OpenRouter API key found (env or auth-profiles)",
         source: id,
       };
     }
 
     const base = normalizeBaseUrl(process.env.OPENROUTER_API_URL);
 
-    const [creditsRes, keyRes] = await Promise.all([
-      fetchJson(`${base}/credits`, token),
-      fetchJson(`${base}/key`, token),
-    ]);
+    const settled = await Promise.all(
+      allKeys.map((profile) =>
+        probeOneKey(base, profile).catch((err) => ({
+          provider: null,
+          instanceId: profile.instanceId,
+          error: `${profile.label || profile.agent || profile.profileKey || profile.instanceId}: ${err?.message || String(err)}`,
+        }))
+      )
+    );
 
-    const credits = creditsRes.ok ? parseCredits(creditsRes.data) : null;
-    const key = keyRes.ok ? parseKey(keyRes.data) : null;
+    const providers = settled.filter((entry) => entry?.provider);
+    const keyErrors = settled.filter((entry) => !entry?.provider && entry?.error).map((entry) => entry.error);
 
-    if (!credits && !key) {
-      const parts = [];
-      if (!creditsRes.ok) {
-        parts.push(
-          `credits ${creditsRes.status || "ERR"}: ${creditsRes.error || "failed"}`
-        );
-      }
-      if (!keyRes.ok) {
-        parts.push(`key ${keyRes.status || "ERR"}: ${keyRes.error || "failed"}`);
-      }
-
+    if (!providers.length) {
       return {
         available: false,
         providers: [],
-        error: parts.join(" | ") || "OpenRouter endpoints unavailable",
+        error: keyErrors.length
+          ? `All OpenRouter keys failed: ${keyErrors.join(" | ")}`
+          : "All OpenRouter keys failed (credits and key endpoints unavailable)",
         source: id,
       };
     }
 
-    const windows = buildWindows(credits, key);
-
-    const plan =
-      key?.isFreeTier === true
-        ? "free-tier"
-        : key?.isManagementKey === true
-          ? "management-key"
-          : null;
-
-    const warnings = [];
-    if (!creditsRes.ok) {
-      warnings.push(
-        `credits unavailable (${creditsRes.status || "ERR"}: ${creditsRes.error || "failed"})`
-      );
-    }
-
     return {
       available: true,
-      providers: [
-        {
-          provider: "openrouter",
-          displayName: "OpenRouter",
-          plan,
-          windows,
-          error: null,
-          openrouter: {
-            credits,
-            key,
-            warnings,
-          },
-        },
-      ],
-      error: null,
+      providers,
+      error: keyErrors.length ? `${keyErrors.length} OpenRouter profile(s) failed` : null,
+      warnings: keyErrors,
       source: id,
     };
   } catch (err) {
