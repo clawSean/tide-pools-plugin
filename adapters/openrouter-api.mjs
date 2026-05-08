@@ -253,6 +253,13 @@ function buildWindows(credits, key) {
   return windows;
 }
 
+function profileNameHint({ label, profileKey, agent, instanceId }) {
+  if (label) return label;
+  if (profileKey) return String(profileKey).replace(/^openrouter:/, "");
+  if (agent) return agent;
+  return instanceId || null;
+}
+
 /**
  * Probe a single key and return a provider entry, or null if the key fails.
  */
@@ -265,7 +272,7 @@ async function probeOneKey(base, { key, instanceId, source: keySource, agent, pr
   const credits = creditsRes.ok ? parseCredits(creditsRes.data) : null;
   const keyData = keyRes.ok ? parseKey(keyRes.data) : null;
 
-  const nameHint = label || agent || profileKey || instanceId;
+  const nameHint = profileNameHint({ label, profileKey, agent, instanceId });
   if (!credits && !keyData) {
     return {
       provider: null,

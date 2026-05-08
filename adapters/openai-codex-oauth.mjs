@@ -346,13 +346,20 @@ function parseUsageResponse(data) {
 /**
  * Probe a single OAuth token and return a provider entry, or null if it fails.
  */
+function profileNameHint({ label, profileKey, agent, instanceId }) {
+  if (label) return label;
+  if (profileKey) return String(profileKey).replace(/^openai-codex:/, "");
+  if (agent) return agent;
+  return instanceId || null;
+}
+
 async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource, agent, profileKey, label }) {
   const data = await fetchJson(usageUrl, token);
   const windows = parseUsageResponse(data);
 
   let displayName = "OpenAI Codex";
   if (tokenSource === "profile") {
-    const nameHint = label || agent || profileKey;
+    const nameHint = profileNameHint({ label, profileKey, agent, instanceId });
     if (nameHint) displayName = `OpenAI Codex [${nameHint}]`;
   }
 
@@ -367,6 +374,8 @@ async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource,
       rawKeys: Object.keys(data || {}),
       source: tokenSource,
       agent: agent || null,
+      profileKey: profileKey || null,
+      label: label || null,
     },
   };
 }

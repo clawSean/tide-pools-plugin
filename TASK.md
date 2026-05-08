@@ -124,3 +124,18 @@ Providers:
 • Venice [Diem]: 1,247.3200 Diem | Requests: 980/1000 (98% left) — via Diem API
 ```
 (No session breakdown section — it just doesn't appear. No error shown to user.)
+
+## Domain Split with WatchCatfish (2026-05-03)
+
+Tide Pools owns **rate limits, quota windows, reset times, usage, and spend**. WatchCatfish owns **operational system health** (gateway, channels, disk, process, network, auth token validity/expiry).
+
+The boundary:
+- Tide Pools answers "How much quota do I have left? When does it reset? Where did I spend it?"
+- WatchCatfish answers "Is my system working? Are my credentials valid and not about to expire?"
+- Tide Pools does NOT check whether services are reachable or whether the gateway is up.
+- WatchCatfish does NOT report quota percentages, reset times, or per-session spend.
+
+Provider auth overlap is intentional but scoped differently:
+- Tide Pools hits provider usage/quota APIs to get dashboard-accurate numbers.
+- WatchCatfish hits provider models endpoints to check basic auth validity (HTTP 200 vs 401) and reads the auth-profile store for token expiry dates.
+- If a provider's API key is broken, both will surface it, but from different angles: Tide Pools says "quota probe failed", WatchCatfish says "auth FAIL (HTTP 401)".
