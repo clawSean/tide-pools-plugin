@@ -26,16 +26,56 @@ function getUsageUrl() {
   return process.env.CODEX_WHAM_URL || "https://chatgpt.com/backend-api/wham/usage";
 }
 
+function decodeJwtPayload(token) {
+  if (!token || typeof token !== "string") return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function tokenIdentity(token) {
+  const payload = decodeJwtPayload(token);
+  const auth = payload?.["https://api.openai.com/auth"] || {};
+  const profile = payload?.["https://api.openai.com/profile"] || {};
+  return {
+    email: typeof profile.email === "string" ? profile.email : null,
+    accountId: typeof auth.chatgpt_account_id === "string" ? auth.chatgpt_account_id : null,
+    planType: typeof auth.chatgpt_plan_type === "string" ? auth.chatgpt_plan_type : null,
+  };
+}
+
+function entryAccountId(entry, token) {
+  return entry?.accountId
+    || entry?.account_id
+    || entry?.chatgptAccountId
+    || entry?.chatgpt_account_id
+    || tokenIdentity(token).accountId
+    || null;
+}
+
+function entryPlanType(entry, token) {
+  return entry?.planType
+    || entry?.plan_type
+    || entry?.chatgptPlanType
+    || entry?.chatgpt_plan_type
+    || tokenIdentity(token).planType
+    || null;
+}
+
 /**
  * Read all valid OAuth tokens from ~/.codex/auth.json and all auth-profiles.
  * Returns token descriptors — token values are included internally for probing
  * but never surfaced in public output.
  *
- * @returns {{ token: string, instanceId: string, source: string, agent?: string, profileKey?: string, label?: string, expires?: number }[]}
+ * @returns {{ token: string, instanceId: string, source: string, agent?: string, profileKey?: string, label?: string, expires?: number, accountId?: string, accountPlan?: string }[]}
  */
 function readAllTokens() {
   const tokens = [];
-  const seenTokens = new Set();
+  const seenAccounts = new Set();
   const now = Date.now();
 
   // Local ~/.codex/auth.json (always "local" profile, no expiry check)
@@ -49,12 +89,24 @@ function readAllTokens() {
       data.auth_token ||
       null;
     if (token && typeof token === "string") {
-      seenTokens.add(token);
-      tokens.push({ token, instanceId: "openai-codex:local", source: "codex-auth", label: "local" });
+      const identity = tokenIdentity(token);
+      const accountId = entryAccountId(data, token);
+      const accountPlan = entryPlanType(data, token);
+      seenAccounts.add(`${token}:${accountId || "default"}`);
+      tokens.push({
+        token,
+        instanceId: accountId ? `openai-codex:local:${accountId}` : "openai-codex:local",
+        source: "codex-auth",
+        label: identity.email || "local",
+        accountId,
+        accountPlan,
+      });
     }
   } catch {}
 
-  // Auth-profile OAuth entries (one per non-expired profile, deduplicated by token value)
+  // Auth-profile OAuth entries (one per non-expired account profile).
+  // Dedupe by token+accountId, not token alone: the same ChatGPT login can
+  // expose multiple subscriptions/accounts selected by ChatGPT-Account-Id.
   try {
     const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
     const agentsDir = path.join(openclawHome, "agents");
@@ -70,16 +122,23 @@ function readAllTokens() {
           if (!entry?.access || typeof entry.access !== "string") continue;
           const expires = typeof entry.expires === "number" ? entry.expires : 0;
           if (expires > 0 && expires < now) continue;
-          if (seenTokens.has(entry.access)) continue;
-          seenTokens.add(entry.access);
+          const accountId = entryAccountId(entry, entry.access);
+          const accountPlan = entryPlanType(entry, entry.access);
+          const seenKey = `${entry.access}:${accountId || "default"}`;
+          if (seenAccounts.has(seenKey)) continue;
+          seenAccounts.add(seenKey);
           tokens.push({
             token: entry.access,
-            instanceId: `openai-codex:profile:${agent}:${profileKey}`,
+            instanceId: accountId
+              ? `openai-codex:profile:${agent}:${profileKey}:${accountId}`
+              : `openai-codex:profile:${agent}:${profileKey}`,
             source: "profile",
             agent,
             profileKey,
             label: entry.label || entry.name || null,
             expires,
+            accountId,
+            accountPlan,
           });
         }
       } catch {
@@ -133,7 +192,7 @@ export function isAvailable() {
 /**
  * Fetch JSON from a URL with bearer auth. Supports both http:// and https://.
  */
-function fetchJson(url, token) {
+function fetchJson(url, token, accountId = null) {
   return new Promise((resolve, reject) => {
     let settled = false;
     let req;
@@ -160,6 +219,7 @@ function fetchJson(url, token) {
       {
         headers: {
           Authorization: `Bearer ${token}`,
+          ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
           "User-Agent": "tide-pools/2.0",
           Accept: "application/json",
         },
@@ -353,8 +413,8 @@ function profileNameHint({ label, profileKey, agent, instanceId }) {
   return instanceId || null;
 }
 
-async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource, agent, profileKey, label }) {
-  const data = await fetchJson(usageUrl, token);
+async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource, agent, profileKey, label, accountId, accountPlan }) {
+  const data = await fetchJson(usageUrl, token, accountId);
   const windows = parseUsageResponse(data);
 
   let displayName = "OpenAI Codex";
@@ -367,7 +427,7 @@ async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource,
     provider: "openai-codex",
     instanceId,
     displayName,
-    plan: data?.plan_type || data?.plan || data?.subscription || null,
+    plan: data?.plan_type || data?.plan || data?.subscription || accountPlan || null,
     windows,
     error: windows.length ? null : "Usage endpoint returned no recognizable windows",
     meta: {
@@ -376,6 +436,9 @@ async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource,
       agent: agent || null,
       profileKey: profileKey || null,
       label: label || null,
+      accountId: accountId || data?.account_id || null,
+      accountPlan: accountPlan || null,
+      email: data?.email || null,
     },
   };
 }

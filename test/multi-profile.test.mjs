@@ -250,13 +250,17 @@ test("openrouter: probe returns one provider row per key against a local HTTP se
 // ─── Test 5: OpenAI Codex probe returns multiple profile rows (local server) ─
 
 test("openai-codex: probe returns one provider row per OAuth profile against a local HTTP server", async (t) => {
+  const seenAccountIds = [];
   const server = http.createServer((req, res) => {
+    const accountId = req.headers["chatgpt-account-id"] || null;
+    seenAccountIds.push(accountId);
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({
-      plan_type: req.headers.authorization?.includes("tok-test-aaaa") ? "team-a" : "team-b",
+      account_id: accountId,
+      plan_type: accountId === "acct-team" ? "team" : "plus",
       rate_limit: {
         primary_window: {
-          used_percent: req.headers.authorization?.includes("tok-test-aaaa") ? 10 : 20,
+          used_percent: accountId === "acct-team" ? 10 : 20,
           limit_window_seconds: 18_000,
           reset_at: Math.floor(Date.now() / 1000) + 3600,
         },
@@ -277,16 +281,18 @@ test("openai-codex: probe returns one provider row per OAuth profile against a l
   writeAuthProfile(dir, "agent1", "codex_profile_a", {
     provider: "openai-codex",
     type: "oauth",
-    access: "tok-test-aaaa",
+    access: "tok-test-shared",
     expires: futureExpiry,
     label: "Codex A",
+    accountId: "acct-team",
   });
   writeAuthProfile(dir, "agent2", "codex_profile_b", {
     provider: "openai-codex",
     type: "oauth",
-    access: "tok-test-bbbb",
+    access: "tok-test-shared",
     expires: futureExpiry,
     label: "Codex B",
+    accountId: "acct-plus",
   });
 
   const restore = saveEnv(["OPENCLAW_HOME", "CODEX_WHAM_URL", "HOME"]);
@@ -305,5 +311,7 @@ test("openai-codex: probe returns one provider row per OAuth profile against a l
   const instIds = result.providers.map((p) => p.instanceId);
   assert.strictEqual(new Set(instIds).size, 2, "instanceIds must be distinct");
   assert.ok(result.providers.every((p) => p.instanceId.startsWith("openai-codex:profile:")));
+  assert.deepStrictEqual(new Set(result.providers.map((p) => p.plan)), new Set(["team", "plus"]));
+  assert.deepStrictEqual(new Set(seenAccountIds), new Set(["acct-team", "acct-plus"]));
   assert.ok(result.providers.every((p) => p.token === undefined), "tokens must not appear in provider rows");
 });
