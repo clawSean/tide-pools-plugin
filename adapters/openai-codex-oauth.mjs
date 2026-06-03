@@ -163,30 +163,10 @@ export function discoverProfiles() {
  */
 export function isAvailable() {
   try {
-    if (fs.existsSync(AUTH_PATH)) return true;
-  } catch {}
-  // Quick check: any non-expired auth-profile OAuth entry?
-  try {
-    const openclawHome = process.env.OPENCLAW_HOME || path.join(os.homedir(), ".openclaw");
-    const agentsDir = path.join(openclawHome, "agents");
-    if (!fs.existsSync(agentsDir)) return false;
-    const now = Date.now();
-    for (const agent of fs.readdirSync(agentsDir)) {
-      const profilePath = path.join(agentsDir, agent, "agent", "auth-profiles.json");
-      try {
-        const raw = fs.readFileSync(profilePath, "utf8");
-        const data = JSON.parse(raw);
-        for (const entry of Object.values(data?.profiles || {})) {
-          if (entry?.provider !== "openai-codex" || entry?.type !== "oauth") continue;
-          if (!entry?.access) continue;
-          const expires = typeof entry.expires === "number" ? entry.expires : 0;
-          if (expires > 0 && expires < now) continue;
-          return true;
-        }
-      } catch { continue; }
-    }
-  } catch {}
-  return false;
+    return readAllTokens().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

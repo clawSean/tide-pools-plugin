@@ -23,8 +23,8 @@ Layer 2 is 100% optional. If it fails, the report renders perfectly without it.
 
 | Command | Description |
 |---------|-------------|
-| `/tidepools` | Tide-themed report (providers + session breakdown) |
-| `/quota_all` | Plain report (supports flags below) |
+| `/tidepools` | Tide-themed report (providers + session breakdown; fast Anthropic mode by default) |
+| `/quota_all` | Plain report (fast Anthropic mode by default; supports flags below) |
 
 ### Flags on `/quota_all`
 
@@ -36,7 +36,7 @@ Layer 2 is 100% optional. If it fails, the report renders perfectly without it.
 | `--no-cache` | Bypass cache |
 | `--cache-ttl-ms N` | Override cache TTL (default: 45000) |
 | `--lookback-hours N` | Enrichment lookback period (default: 24) |
-| `--anthropic-source auto|api|subscription` | Anthropic source mode: auto (subscription via Claude `/usage`, API via fallback), api (force OpenClaw usage fallback), or subscription (force Claude `/usage`) |
+| `--anthropic-source auto|api|subscription` | Anthropic source mode. Slash commands default to `api` for responsiveness; use `subscription` when you explicitly want Claude `/usage` windows. |
 
 ---
 
@@ -118,8 +118,8 @@ Optional env overrides:
 
 ### Anthropic source modes
 
-- **auto** (default): uses direct Claude `/usage` data when subscription windows are present; falls back to `openclaw status --usage` for API-style usage.
-- **api**: disables Claude `/usage` adapter and forces Anthropic data from `openclaw status` fallback.
+- **auto**: uses direct Claude `/usage` data when subscription windows are present; falls back to `openclaw status --usage` for API-style usage. This is the CLI default.
+- **api**: disables the slow Claude `/usage` adapter. This is the slash-command default so `/tidepools` and `/quota_all` stay responsive in chat.
 - **subscription**: requires Claude `/usage` subscription windows (same source as Anthrometer).
 
 ---

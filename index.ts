@@ -54,7 +54,7 @@ function parseQuotaArgs(raw: string | undefined) {
     noCache: has(/(?:^|\s)--no-cache(?:\s|$)/i),
     cacheTtlMs: matchCacheTtl ? Number(matchCacheTtl[1]) : undefined,
     lookbackHours: matchLookback ? Number(matchLookback[1]) : undefined,
-    anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() as "auto" | "api" | "subscription" : undefined,
+    anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() as "auto" | "api" | "subscription" : "api",
   } as const;
 }
 
@@ -102,7 +102,7 @@ export default function register(api: any) {
   api.registerCommand({
     name: "quota_all",
     description:
-      "All provider quota windows (supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N, --anthropic-source auto|api|subscription)",
+      "All provider quota windows (fast by default; supports: --json, --no-venice, --no-enrich, --no-cache, --lookback-hours N, --anthropic-source auto|api|subscription)",
     nativeProgressMessages: { default: pickProgress() },
     acceptsArgs: true,
     requireAuth: true,

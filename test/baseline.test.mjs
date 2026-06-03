@@ -83,7 +83,7 @@ function parseQuotaArgs(raw) {
     noCache: has(/(?:^|\s)--no-cache(?:\s|$)/i),
     cacheTtlMs: matchCacheTtl ? Number(matchCacheTtl[1]) : undefined,
     lookbackHours: matchLookback ? Number(matchLookback[1]) : undefined,
-    anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() : undefined,
+    anthropicSource: matchAnthropicSource ? String(matchAnthropicSource[1]).toLowerCase() : "api",
   };
 }
 
@@ -95,7 +95,7 @@ test("parseQuotaArgs: defaults with empty input", () => {
   assert.equal(r.noCache, false);
   assert.equal(r.cacheTtlMs, undefined);
   assert.equal(r.lookbackHours, undefined);
-  assert.equal(r.anthropicSource, undefined);
+  assert.equal(r.anthropicSource, "api");
 });
 
 test("parseQuotaArgs: parses --json flag", () => {

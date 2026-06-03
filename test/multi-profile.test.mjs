@@ -133,6 +133,29 @@ test("openai-codex: discoverProfiles returns one entry per unique non-expired pr
   assert.ok(profileEntries.every((p) => p.token === undefined), "token must not be exposed");
 });
 
+test("openai-codex: empty local auth file is unavailable", async (t) => {
+  const dir = makeTempOpenclawHome();
+  const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "tide-pools-fake-home-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(fakeHome, { recursive: true, force: true }));
+
+  fs.mkdirSync(path.join(fakeHome, ".codex"), { recursive: true });
+  fs.writeFileSync(path.join(fakeHome, ".codex", "auth.json"), JSON.stringify({}));
+
+  const restore = saveEnv(["OPENCLAW_HOME", "HOME"]);
+  t.after(restore);
+  process.env.OPENCLAW_HOME = dir;
+  process.env.HOME = fakeHome;
+
+  const { discoverProfiles, isAvailable, probe } = await import(`../adapters/openai-codex-oauth.mjs?emptyAuth=${Date.now()}`);
+  assert.equal(discoverProfiles().length, 0);
+  assert.equal(isAvailable(), false);
+
+  const result = await probe();
+  assert.equal(result.available, false);
+  assert.match(result.error, /No Codex OAuth credentials/);
+});
+
 // ─── Test 3: Registry buildProviderMap preserves same-kind providers ──────────
 
 test("registry: buildProviderMap preserves distinct same-provider-kind rows", async () => {
