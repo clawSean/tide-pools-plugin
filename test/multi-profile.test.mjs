@@ -105,6 +105,16 @@ test("openai-codex: discoverProfiles returns one entry per unique non-expired pr
     expires: futureExpiry,
     label: "Bob",
   });
+  // Current OpenClaw stores ChatGPT OAuth profiles as provider: "openai".
+  writeAuthProfile(dir, "agent4", "openai:charlie@example.com", {
+    provider: "openai",
+    type: "oauth",
+    access: "tok-test-cccc",
+    expires: futureExpiry,
+    email: "charlie@example.com",
+    accountId: "acct-charlie",
+    chatgptPlanType: "plus",
+  });
   // Expired profile — must be excluded
   writeAuthProfile(dir, "agent3", "codex_profile_expired", {
     provider: "openai-codex",
@@ -126,11 +136,15 @@ test("openai-codex: discoverProfiles returns one entry per unique non-expired pr
   const profiles = discoverProfiles();
 
   const profileEntries = profiles.filter((p) => p.source === "profile");
-  assert.strictEqual(profileEntries.length, 2, "should find 2 non-expired profile entries");
+  assert.strictEqual(profileEntries.length, 3, "should find 3 non-expired profile entries");
 
   const ids = profileEntries.map((p) => p.instanceId);
-  assert.strictEqual(new Set(ids).size, 2, "instanceIds must be distinct");
+  assert.strictEqual(new Set(ids).size, 3, "instanceIds must be distinct");
   assert.ok(profileEntries.every((p) => p.token === undefined), "token must not be exposed");
+  assert.ok(
+    profileEntries.some((p) => p.profileKey === "openai:charlie@example.com" && p.accountPlan === "plus"),
+    "current OpenClaw provider: openai OAuth profile should be accepted"
+  );
 });
 
 test("openai-codex: empty local auth file is unavailable", async (t) => {
@@ -153,7 +167,7 @@ test("openai-codex: empty local auth file is unavailable", async (t) => {
 
   const result = await probe();
   assert.equal(result.available, false);
-  assert.match(result.error, /No Codex OAuth credentials/);
+  assert.match(result.error, /No ChatGPT\/OpenAI OAuth credentials/);
 });
 
 // ─── Test 3: Registry buildProviderMap preserves same-kind providers ──────────
@@ -317,6 +331,15 @@ test("openai-codex: probe returns one provider row per OAuth profile against a l
     label: "Codex B",
     accountId: "acct-plus",
   });
+  writeAuthProfile(dir, "agent3", "openai:charlie@example.com", {
+    provider: "openai",
+    type: "oauth",
+    access: "tok-test-openai",
+    expires: futureExpiry,
+    email: "charlie@example.com",
+    accountId: "acct-openai",
+    chatgptPlanType: "plus",
+  });
 
   const restore = saveEnv(["OPENCLAW_HOME", "CODEX_WHAM_URL", "HOME"]);
   t.after(restore);
@@ -329,12 +352,12 @@ test("openai-codex: probe returns one provider row per OAuth profile against a l
   const result = await probe();
 
   assert.strictEqual(result.available, true, "probe should succeed");
-  assert.strictEqual(result.providers.length, 2, "should return 2 provider rows");
-  assert.ok(result.providers.every((p) => p.provider === "openai-codex"));
+  assert.strictEqual(result.providers.length, 3, "should return 3 provider rows");
+  assert.ok(result.providers.every((p) => p.provider === "openai"));
   const instIds = result.providers.map((p) => p.instanceId);
-  assert.strictEqual(new Set(instIds).size, 2, "instanceIds must be distinct");
+  assert.strictEqual(new Set(instIds).size, 3, "instanceIds must be distinct");
   assert.ok(result.providers.every((p) => p.instanceId.startsWith("openai-codex:profile:")));
   assert.deepStrictEqual(new Set(result.providers.map((p) => p.plan)), new Set(["team", "plus"]));
-  assert.deepStrictEqual(new Set(seenAccountIds), new Set(["acct-team", "acct-plus"]));
+  assert.deepStrictEqual(new Set(seenAccountIds), new Set(["acct-team", "acct-plus", "acct-openai"]));
   assert.ok(result.providers.every((p) => p.token === undefined), "tokens must not appear in provider rows");
 });

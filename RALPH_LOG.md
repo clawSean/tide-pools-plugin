@@ -77,3 +77,30 @@
 
 ### Next
 - DONE unless JPop wants commit/PR packaging.
+
+## Iteration 4 — 2026-06-05 23:08 PT
+
+### Slice
+- Restored Tide Pools OpenAI/Codex reporting against current OpenClaw ChatGPT OAuth auth profiles.
+- Accepted both legacy `provider: "openai-codex"` and current `provider: "openai"` OAuth profile entries.
+- Preserved `ChatGPT-Account-Id` handling for multi-account ChatGPT logins.
+- Changed the direct adapter provider kind to canonical `openai` so the direct WHAM row suppresses the `openclaw-status` OpenAI fallback row instead of duplicating it.
+- Updated README and focused multi-profile tests.
+
+### Verification
+- Command/check: `npm test`
+- Result: pass
+- Evidence: 31/31 node:test tests passed.
+- Command/check: `node ./cli.mjs --format text --theme tide --no-cache --no-enrich --no-venice`
+- Result: pass
+- Evidence: one OpenAI/Codex row rendered via `OAuth API`: `5h: 98% left` and `week: 54% left`; no duplicate OpenAI row via `OpenClaw status`.
+- Command/check: `node ./cli.mjs --format json --no-cache --no-enrich --no-venice`
+- Result: pass
+- Evidence: OpenAI provider row had `source: "openai-codex-oauth"` and `sourceType: "direct"`; adapter results showed `openai-codex-oauth` available with one provider.
+
+### Learnings
+- Current OpenClaw stores ChatGPT OAuth under provider `openai`, not only legacy `openai-codex`.
+- Tide Pools fallback suppression must use canonical provider kind `openai`; otherwise the direct adapter and `openclaw-status` fallback both render OpenAI quota rows.
+
+### Next
+- DONE.

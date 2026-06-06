@@ -44,7 +44,7 @@ Layer 2 is 100% optional. If it fails, the report renders perfectly without it.
 
 | Adapter | Provider | Source | Priority |
 |---------|----------|--------|----------|
-| `openai-codex-oauth` | OpenAI/Codex | `~/.codex/auth.json` → OAuth usage API | Direct (primary) |
+| `openai-codex-oauth` | OpenAI/Codex | OpenClaw ChatGPT OAuth profile or `~/.codex/auth.json` → WHAM usage API | Direct (primary) |
 | `anthropic-cli-usage` | Anthropic (subscription) | Claude CLI `/usage` via tmux session | Direct (primary for subscription mode) |
 | `openrouter-api` | OpenRouter | OpenRouter `/credits` + `/key` endpoints | Direct (primary) |
 | `venice-diem` | Venice | Diem plugin script → HTTP headers | Direct (primary) |
@@ -73,16 +73,16 @@ Optional env overrides: `OPENROUTER_API_URL`, `OPENROUTER_HTTP_REFERER`, `OPENRO
 
 ### Codex (OpenAI)
 
-**Requirements:** The Codex CLI must have been logged in at least once to create `~/.codex/auth.json`. The CLI does **not** need to be running.
+**Requirements:** A ChatGPT/OpenAI OAuth profile in OpenClaw auth-profiles, or a Codex CLI login that created `~/.codex/auth.json`. Neither Codex nor OpenClaw status need to be running for the direct adapter.
 
 ```bash
 npm install -g @openai/codex
 codex auth
 ```
 
-**How it works:** Reads the saved OAuth token from `~/.codex/auth.json` and makes a direct HTTPS call to OpenAI's usage endpoint — the same source the web dashboard uses.
+**How it works:** Reads saved OAuth tokens from OpenClaw auth-profiles (`provider: "openai"` or legacy `provider: "openai-codex"`) and `~/.codex/auth.json`, then makes a direct HTTPS call to ChatGPT's WHAM usage endpoint. When an auth profile has `accountId`, Tide Pools sends `ChatGPT-Account-Id` so multi-account ChatGPT logins report the right quota window.
 
-**If Codex doesn't show up:** The file `~/.codex/auth.json` doesn't exist. Install the Codex CLI and run `codex auth` once. After that, Tide Pools will pick it up automatically. If the token has expired, you may need to run `codex auth` again.
+**If Codex doesn't show up:** No OpenAI OAuth token was found, or the stored token expired. Re-authenticate through OpenClaw's OpenAI auth flow or install the Codex CLI and run `codex auth` once.
 
 Note: Codex data will still appear via the `openclaw-status` fallback even without this adapter, but with less detail (no per-window breakdown).
 

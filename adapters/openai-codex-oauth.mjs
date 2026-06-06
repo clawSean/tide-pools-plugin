@@ -7,6 +7,8 @@
  * separately and returned as a distinct provider row with its own instanceId.
  *
  * This is the same approach CodexBar uses — first-party session state.
+ * Current OpenClaw stores ChatGPT OAuth profiles under provider "openai";
+ * older Tide Pools/OpenClaw builds used "openai-codex". Accept both.
  * If no credentials exist or all tokens are expired, isAvailable() returns false.
  */
 
@@ -20,7 +22,8 @@ const AUTH_PATH = path.join(os.homedir(), ".codex", "auth.json");
 const TIMEOUT_MS = 15_000;
 
 export const id = "openai-codex-oauth";
-export const provider = "openai-codex";
+export const provider = "openai";
+const ACCEPTED_PROFILE_PROVIDERS = new Set(["openai-codex", "openai"]);
 
 function getUsageUrl() {
   return process.env.CODEX_WHAM_URL || "https://chatgpt.com/backend-api/wham/usage";
@@ -118,7 +121,7 @@ function readAllTokens() {
         const raw = fs.readFileSync(profilePath, "utf8");
         const data = JSON.parse(raw);
         for (const [profileKey, entry] of Object.entries(data?.profiles || {})) {
-          if (entry?.provider !== "openai-codex" || entry?.type !== "oauth") continue;
+          if (!ACCEPTED_PROFILE_PROVIDERS.has(entry?.provider) || entry?.type !== "oauth") continue;
           if (!entry?.access || typeof entry.access !== "string") continue;
           const expires = typeof entry.expires === "number" ? entry.expires : 0;
           if (expires > 0 && expires < now) continue;
@@ -200,6 +203,7 @@ function fetchJson(url, token, accountId = null) {
         headers: {
           Authorization: `Bearer ${token}`,
           ...(accountId ? { "ChatGPT-Account-Id": accountId } : {}),
+          originator: "tide-pools",
           "User-Agent": "tide-pools/2.0",
           Accept: "application/json",
         },
@@ -388,7 +392,7 @@ function parseUsageResponse(data) {
  */
 function profileNameHint({ label, profileKey, agent, instanceId }) {
   if (label) return label;
-  if (profileKey) return String(profileKey).replace(/^openai-codex:/, "");
+  if (profileKey) return String(profileKey).replace(/^(openai-codex|openai):/, "");
   if (agent) return agent;
   return instanceId || null;
 }
@@ -404,7 +408,7 @@ async function probeOneToken(usageUrl, { token, instanceId, source: tokenSource,
   }
 
   return {
-    provider: "openai-codex",
+    provider: "openai",
     instanceId,
     displayName,
     plan: data?.plan_type || data?.plan || data?.subscription || accountPlan || null,
@@ -431,7 +435,7 @@ export async function probe() {
       return {
         available: false,
         providers: [],
-        error: "No Codex OAuth credentials found (~/.codex/auth.json or auth-profiles.json)",
+        error: "No ChatGPT/OpenAI OAuth credentials found (~/.codex/auth.json or OpenClaw auth-profiles.json)",
         source: id,
       };
     }
